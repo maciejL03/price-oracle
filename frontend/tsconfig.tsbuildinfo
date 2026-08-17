@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/api/client.ts","./src/components/comparisonview.tsx","./src/components/layout.tsx","./src/components/pricecard.tsx","./src/components/searchbox.tsx","./src/hooks/useitemsearch.ts","./src/hooks/usepricecomparison.ts","./src/lib/format.ts","./src/types/index.ts"],"version":"5.7.3"}
