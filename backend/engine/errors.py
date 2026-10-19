@@ -2,6 +2,14 @@ class EngineError(Exception):
     """Base exception for engine infrastructure failures."""
 
 
+class StorageError(EngineError):
+    """Raised when durable engine storage cannot complete an operation."""
+
+
+class StorageBusyError(StorageError):
+    """Raised when SQLite remains locked after its configured busy timeout."""
+
+
 class JobError(EngineError):
     """Base exception for job execution infrastructure failures."""
 

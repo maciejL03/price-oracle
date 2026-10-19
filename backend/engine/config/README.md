@@ -4,7 +4,7 @@
 
 The `engine.config` package loads and validates the small set of startup values used by the
 implemented engine infrastructure. [`EngineSettings`](settings.py) currently configures the
-`JobHandler` worker pool, bounded queue, and shutdown timeout.
+`JobHandler` worker pool and shutdown behavior plus the SQLite storage path and busy timeout.
 
 The package owns configuration parsing and validation only. It does not start the application,
 create jobs, connect to a database, select marketplaces, or expose a global settings instance.
@@ -24,7 +24,7 @@ flowchart LR
     Settings -. future dependency injection .-> Bootstrap[Application bootstrap<br/>not implemented]
     Bootstrap -.-> Handler[JobHandler]
     Bootstrap -.-> Scheduler[JobScheduler]
-    Bootstrap -.-> Future[Other future engine components]
+    Bootstrap -.-> Storage[StorageService]
 
     style Settings fill:#eef6ff,stroke:#3178c6
     style Bootstrap stroke-dasharray: 5 5
@@ -73,9 +73,11 @@ settings = EngineSettings()
 | `worker_count` | `int` | `5` | Maximum number of jobs the handler can execute concurrently |
 | `job_queue_capacity` | `int` | `100` | Maximum number of jobs waiting for a worker |
 | `job_shutdown_timeout_seconds` | `float` | `10.0` | Maximum graceful-drain time before handler cancellation |
+| `database_path` | `Path` | `data/engine.sqlite3` | File used for durable engine storage |
+| `database_busy_timeout_seconds` | `float` | `5.0` | Bounded wait for SQLite lock contention |
 
-Every field must be greater than zero. Invalid explicit values or values from an external source
-raise Pydantic's `ValidationError`; they are never replaced with a default.
+Numeric fields must be greater than zero. Invalid explicit values or values from an external
+source raise Pydantic's `ValidationError`; they are never replaced with a default.
 
 The class adds no custom loading methods. Pydantic supplies construction, validation,
 `model_dump()`, and source handling. The module creates no object at import time.
@@ -102,6 +104,8 @@ Environment variables use the `CS2_` prefix:
 export CS2_WORKER_COUNT=8
 export CS2_JOB_QUEUE_CAPACITY=250
 export CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS=15
+export CS2_DATABASE_PATH=data/engine.sqlite3
+export CS2_DATABASE_BUSY_TIMEOUT_SECONDS=5
 ```
 
 Pydantic converts these strings to the declared numeric types before applying the positive-value
@@ -154,9 +158,9 @@ duplicate those features and create more failure modes.
 
 ### One settings class
 
-Three related job-infrastructure values do not justify managers, registries, or separate settings
-models. One class keeps construction and testing direct. It can be split later only if implemented
-components develop genuinely independent configuration boundaries.
+The implemented infrastructure values do not justify managers, registries, or separate settings
+models. One class keeps construction and testing direct. It can be split later only if components
+develop genuinely independent configuration boundaries.
 
 ### Explicit dependency injection
 
@@ -165,12 +169,17 @@ There is no module-level `settings` singleton. Callers pass validated values int
 ```python
 from engine.config import EngineSettings
 from engine.jobs import JobHandler
+from engine.storage import StorageService
 
 settings = EngineSettings()
 handler = JobHandler(
     worker_count=settings.worker_count,
     queue_capacity=settings.job_queue_capacity,
     shutdown_timeout=settings.job_shutdown_timeout_seconds,
+)
+storage = StorageService(
+    settings.database_path,
+    busy_timeout_seconds=settings.database_busy_timeout_seconds,
 )
 ```
 
@@ -198,6 +207,12 @@ startup. An explicit constructor value still takes precedence, which is useful i
 
 No action is required. When `/run/secrets` is absent, construction continues with environment,
 dotenv, and default values.
+
+### Change the SQLite location
+
+Set `CS2_DATABASE_PATH` to a writable file location. `StorageService.initialize()` creates its
+parent directory. Increase `CS2_DATABASE_BUSY_TIMEOUT_SECONDS` only when the engine should wait
+longer for another SQLite writer; the timeout remains bounded and is not a retry loop.
 
 ### Pass deterministic test configuration
 
@@ -233,6 +248,7 @@ The configuration tests validate:
 
 - Defaults, resulting types, positive-value constraints, conversion, and serialization.
 - Explicit injection into the existing `JobHandler`.
+- Database path and positive busy-timeout configuration consumed by `StorageService`.
 - Environment, temporary dotenv, and temporary Docker Secrets sources.
 - The complete source-precedence order and the required `CS2_` secret filename prefix.
 - Missing secrets directories, invalid external values, and environment isolation.
@@ -243,9 +259,8 @@ Run the full backend suite from `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-At the time this README was written, the full suite completed with **110 passing tests**, including
-**29 configuration tests**. The tests require no Docker daemon, network calls, database server, or
-real credentials.
+At the time this README was updated, the full suite completed with **125 passing tests**. The tests
+require no Docker daemon, network calls, external database server, or real credentials.
 
 ## Extending the module
 

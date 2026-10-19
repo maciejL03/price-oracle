@@ -16,12 +16,16 @@ def test_environment_variables_are_loaded_and_converted(
     monkeypatch.setenv("CS2_WORKER_COUNT", "3")
     monkeypatch.setenv("CS2_JOB_QUEUE_CAPACITY", "40")
     monkeypatch.setenv("CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS", "2.5")
+    monkeypatch.setenv("CS2_DATABASE_PATH", "state/test.sqlite3")
+    monkeypatch.setenv("CS2_DATABASE_BUSY_TIMEOUT_SECONDS", "1.25")
 
     settings = EngineSettings(_env_file=None, _secrets_dir=None)
 
     assert settings.worker_count == 3
     assert settings.job_queue_capacity == 40
     assert settings.job_shutdown_timeout_seconds == 2.5
+    assert settings.database_path == Path("state/test.sqlite3")
+    assert settings.database_busy_timeout_seconds == 1.25
 
 
 def test_unprefixed_environment_variables_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
