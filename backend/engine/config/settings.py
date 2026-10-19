@@ -21,3 +21,5 @@ class EngineSettings(BaseSettings):
     worker_count: Annotated[int, Field(gt=0)] = 5
     job_queue_capacity: Annotated[int, Field(gt=0)] = 100
     job_shutdown_timeout_seconds: Annotated[float, Field(gt=0)] = 10.0
+    database_path: Path = Path("data/engine.sqlite3")
+    database_busy_timeout_seconds: Annotated[float, Field(gt=0)] = 5.0

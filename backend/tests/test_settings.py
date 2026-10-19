@@ -16,6 +16,10 @@ def test_default_settings_are_valid_and_typed() -> None:
     assert isinstance(settings.job_queue_capacity, int)
     assert settings.job_shutdown_timeout_seconds == 10.0
     assert isinstance(settings.job_shutdown_timeout_seconds, float)
+    assert settings.database_path == Path("data/engine.sqlite3")
+    assert isinstance(settings.database_path, Path)
+    assert settings.database_busy_timeout_seconds == 5.0
+    assert isinstance(settings.database_busy_timeout_seconds, float)
 
 
 @pytest.mark.parametrize(
@@ -27,6 +31,8 @@ def test_default_settings_are_valid_and_typed() -> None:
         ("job_queue_capacity", -1),
         ("job_shutdown_timeout_seconds", 0),
         ("job_shutdown_timeout_seconds", -0.1),
+        ("database_busy_timeout_seconds", 0),
+        ("database_busy_timeout_seconds", -0.1),
     ],
 )
 def test_non_positive_job_settings_are_rejected(field: str, value: int | float) -> None:
@@ -43,6 +49,7 @@ def test_non_positive_job_settings_are_rejected(field: str, value: int | float) 
         ("worker_count", "many"),
         ("job_queue_capacity", "unbounded"),
         ("job_shutdown_timeout_seconds", "eventually"),
+        ("database_busy_timeout_seconds", "eventually"),
     ],
 )
 def test_invalid_types_are_rejected(field: str, value: str) -> None:
@@ -59,11 +66,15 @@ def test_settings_convert_supported_string_inputs() -> None:
         worker_count="3",
         job_queue_capacity="20",
         job_shutdown_timeout_seconds="2.5",
+        database_path="var/lib/quotes.sqlite3",
+        database_busy_timeout_seconds="1.25",
     )
 
     assert settings.worker_count == 3
     assert settings.job_queue_capacity == 20
     assert settings.job_shutdown_timeout_seconds == 2.5
+    assert settings.database_path == Path("var/lib/quotes.sqlite3")
+    assert settings.database_busy_timeout_seconds == 1.25
 
 
 def test_settings_dump_contains_only_validated_values() -> None:
@@ -73,12 +84,16 @@ def test_settings_dump_contains_only_validated_values() -> None:
         worker_count=2,
         job_queue_capacity=12,
         job_shutdown_timeout_seconds=1.5,
+        database_path=Path("state/quotes.sqlite3"),
+        database_busy_timeout_seconds=0.75,
     )
 
     assert settings.model_dump() == {
         "worker_count": 2,
         "job_queue_capacity": 12,
         "job_shutdown_timeout_seconds": 1.5,
+        "database_path": Path("state/quotes.sqlite3"),
+        "database_busy_timeout_seconds": 0.75,
     }
 
 
