@@ -52,3 +52,14 @@ failures raise `StorageError`, preserving the original exception as their cause.
 
 There is no application-wide database lock, in-memory mirror, write queue, repository
 hierarchy, migration framework, or speculative schema for watchlists and alerts.
+
+## Testing
+
+Run from `backend/` using the project environment:
+
+```bash
+python -m pytest -q tests/test_storage_service.py
+python -m pytest -q
+```
+
+Tests use temporary SQLite files and require no external database server or credentials.

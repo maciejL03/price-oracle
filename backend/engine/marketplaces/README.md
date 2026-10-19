@@ -146,10 +146,10 @@ python -m pytest -p no:cacheprovider \
 python -m pytest -p no:cacheprovider -q
 ```
 
-Results on 2026-10-19:
+Results after integration on 2026-10-20:
 
 - Marketplace tests: **54 passed**.
-- Complete existing backend suite: **164 passed**.
+- Complete backend suite: **228 passed**.
 - Skipped tests: **0**.
 
 All integration tests use `httpx.MockTransport`; no live API or credentials were used.

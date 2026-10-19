@@ -121,7 +121,7 @@ backpressure, not an out-of-memory condition.
 | `QUEUE_FULL` | Every waiting slot is occupied | Retry later only if the caller's policy requires it |
 
 Submitting before startup or after shutdown begins is a lifecycle error rather than an expected
-capacity outcome, so [`JobLifecycleError`](../errors.py#L9) is raised. Invalid configuration and
+capacity outcome, so [`JobLifecycleError`](../errors.py#L17) is raised. Invalid configuration and
 empty keys raise `ValueError`.
 
 ```mermaid
@@ -272,7 +272,7 @@ finally:
 
 Graceful handler shutdown first stops accepting work, then waits for queued and running jobs. If the
 configured timeout expires, it cancels running work, discards work that never started, clears key
-tracking, and raises [`JobShutdownTimeout`](../errors.py#L13). The error is raised **after cleanup** so
+tracking, and raises [`JobShutdownTimeout`](../errors.py#L21). The error is raised **after cleanup** so
 the caller learns that shutdown was forced without leaving worker or queue state behind.
 
 Async cancellation is preserved: cancelling `stop()` forces worker cleanup and then re-raises

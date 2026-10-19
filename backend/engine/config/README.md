@@ -142,11 +142,12 @@ The environment prefix applies to secret filenames as well as environment variab
 
 with file content `8` sets `worker_count` to `8`. A file named `WORKER_COUNT` is not a match. The
 exact mapping is tested in
-[`test_docker_secret_filenames_include_environment_prefix`](../../tests/test_configuration_sources.py#L102).
+[`test_docker_secret_filenames_include_environment_prefix`](../../tests/test_configuration_sources.py#L106).
 
-The current model has no credentials because no implemented engine service consumes one. Therefore
-none of its present fields requires `SecretStr`. A future credential must use a protected Pydantic
-type and receive masking tests before it is added.
+The current model does not own marketplace credentials. `CSFloatMarketplace` accepts an optional
+API key directly from its caller, so a future bootstrap layer must decide whether that credential
+belongs in `EngineSettings` or in a separate secret boundary. Any credential added here must use a
+protected Pydantic type and receive masking tests.
 
 ## Design decisions
 
@@ -235,12 +236,12 @@ should be used to isolate them.
 `CS2_WORKER_COUNT=0` produces a `ValidationError` identifying `worker_count` and its greater-than-zero
 constraint. Construction stops; Pydantic does not fall back to `5`.
 
-### Add a marketplace credential later
+### Configure a marketplace credential through this model
 
-No credential is currently supported. When an implemented adapter requires one, add a specifically
-named `SecretStr` field rather than a generic API key, pass it explicitly to that adapter, and add
-tests proving that environment and prefixed secret-file input work without exposing the value in
-`repr()` or serialization.
+No credential is currently represented by `EngineSettings`. If bootstrap configuration takes
+ownership of the optional CSFloat API key, add a specifically named `SecretStr` field rather than a
+generic API key, pass it explicitly to the adapter, and add tests proving that environment and
+prefixed secret-file input work without exposing the value in `repr()` or serialization.
 
 ## Testing
 
@@ -259,7 +260,7 @@ Run the full backend suite from `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-At the time this README was updated, the full suite completed with **125 passing tests**. The tests
+After integration, the full suite completed with **228 passing tests**. The tests
 require no Docker daemon, network calls, external database server, or real credentials.
 
 ## Extending the module

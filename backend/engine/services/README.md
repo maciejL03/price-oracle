@@ -127,10 +127,12 @@ flowchart LR
 backend/
 ├── engine/services/
 │   ├── __init__.py
+│   ├── collection.py
 │   ├── pricing.py
 │   └── README.md
 └── tests/
-    └── test_pricing_service.py
+    ├── test_collection_service.py
+    └── test_pricing_service.py
 ```
 
 - [`pricing.py`](pricing.py) contains the service, result models, and exclusion reasons.
@@ -237,8 +239,8 @@ python -m pytest -q tests/test_pricing_service.py
 python -m pytest -q
 ```
 
-The implementation was verified with Python 3.12: **29 pricing tests passed** and the complete
-backend suite completed with **139 tests passed**. Tests use synthetic data and require no network,
+The implementation was verified with Python 3.12: **29 pricing tests passed** and the integrated
+backend suite completed with **228 tests passed**. Tests use synthetic data and require no network,
 database, credentials, or running marketplace.
 
 ### Known limitations and extension points
