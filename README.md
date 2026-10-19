@@ -11,15 +11,18 @@ frontend/          React UI (search, cards, comparison)
     └── api/       HTTP client only
 
 backend/
-    ├── domain/    Pure models + comparison logic (no I/O)
-    ├── ports/     Abstract marketplace interfaces
-    ├── adapters/  Steam, Skinport, ByMykel implementations
-    ├── services/  Orchestration (search + compare)
-    └── api/       FastAPI routes + response schemas
+    ├── engine/jobs/  Job execution and recurring scheduling
+    └── app/
+        ├── domain/    Pure models + comparison logic (no I/O)
+        ├── ports/     Abstract marketplace interfaces
+        ├── adapters/  Steam, Skinport, ByMykel implementations
+        ├── services/  Orchestration (search + compare)
+        └── api/       FastAPI routes + response schemas
 ```
 
 | Layer | Responsibility |
 |-------|----------------|
+| **engine/jobs** | [Bounded asynchronous jobs and recurring scheduling](backend/engine/jobs/README.md) |
 | **domain** | `CatalogItem`, `SteamPrice`, `SkinportPrice`, `PriceComparison` |
 | **ports** | `ItemCatalog`, `SteamMarket`, `SkinportMarket` interfaces |
 | **adapters** | External API clients (ByMykel, Steam, Skinport) |
