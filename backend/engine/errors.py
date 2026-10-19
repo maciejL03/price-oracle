@@ -58,5 +58,13 @@ class MarketplaceRegistrationError(MarketplaceError, ValueError):
     """Raised when a marketplace cannot be registered."""
 
 
+class InvalidMarketplaceError(MarketplaceRegistrationError, TypeError):
+    """Raised when an object does not implement the marketplace contract."""
+
+
+class DuplicateMarketplaceError(MarketplaceRegistrationError):
+    """Raised when a marketplace identifier is already registered."""
+
+
 class UnknownMarketplaceError(MarketplaceError, LookupError):
     """Raised when a requested marketplace has not been registered."""
