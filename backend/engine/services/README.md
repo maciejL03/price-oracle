@@ -1,0 +1,159 @@
+# Engine services
+
+## PricingService
+
+[`PricingService`](pricing.py) turns normalized [`MarketQuote`](../models/quote.py) objects into a
+deterministic, pre-fee [`PriceComparison`](pricing.py). It performs no fetching, persistence,
+scheduling, currency conversion, or marketplace-specific processing.
+
+```mermaid
+flowchart LR
+    Item[Canonical Item] --> Compare[PricingService.compare]
+    Quotes[Normalized MarketQuotes] --> Compare
+    Request[Currency, quote type,<br/>as-of time] --> Compare
+    Compare --> Identity{Exact item?}
+    Identity --> Currency{Exact currency?}
+    Currency --> Semantics{Exact quote type?}
+    Semantics --> Fresh{Fresh and not future?}
+    Fresh --> Rank[Deduplicate and rank<br/>by Decimal price]
+    Rank --> Result[PriceComparison]
+    Identity --> Excluded[ExcludedQuote + reason]
+    Currency --> Excluded
+    Semantics --> Excluded
+    Fresh --> Excluded
+```
+
+### Files
+
+```text
+backend/
+├── engine/services/
+│   ├── __init__.py
+│   ├── pricing.py
+│   └── README.md
+└── tests/
+    └── test_pricing_service.py
+```
+
+- [`pricing.py`](pricing.py) contains the service, result models, and exclusion reasons.
+- [`__init__.py`](__init__.py) exposes the supported public interface.
+- [`test_pricing_service.py`](../../tests/test_pricing_service.py) contains deterministic unit and
+  domain-model integration tests.
+
+### Public interface
+
+Construct the service with the maximum acceptable age for an observation, then call its only
+operation:
+
+```python
+from datetime import UTC, datetime, timedelta
+
+from engine.models import Item, QuoteType
+from engine.services import PricingService
+
+service = PricingService(max_quote_age=timedelta(minutes=5))
+comparison = service.compare(
+    Item(market_hash_name="AK-47 | Redline (Field-Tested)"),
+    quotes,
+    currency="GBP",
+    quote_type=QuoteType.LOWEST_ASK,
+    as_of=datetime.now(UTC),
+)
+```
+
+`compare()` is synchronous and has no hidden clock: the caller supplies `as_of`, making the same
+input produce the same result. [`PriceComparison`](pricing.py) contains:
+
+| Field | Meaning |
+|---|---|
+| `item`, `currency`, `quote_type` | Exact comparison group requested by the caller |
+| `as_of`, `max_quote_age` | Freshness policy used for this result |
+| `quotes` | Eligible quotes ordered from lowest to highest price |
+| `excluded_quotes` | Rejected quotes and their first incompatibility reason |
+| `lowest_price`, `highest_price`, `spread` | Exact `Decimal` summary values, or `None` when empty |
+| `best_quote` | Convenience property returning the first ranked quote, or `None` |
+
+An empty or wholly incompatible input returns a valid empty comparison. Invalid request types,
+currency syntax, naive `as_of` timestamps, or non-positive freshness windows raise `TypeError` or
+`ValueError` at the service boundary.
+
+### Comparison rules
+
+Comparability is deliberately strict:
+
+1. `market_hash_name` must exactly equal the supplied `Item` identity. Wear, StatTrak, and other
+   variants therefore remain separate.
+2. Currency must exactly match the requested uppercase ISO-style three-letter code. No implicit
+   exchange rate is used.
+3. Quote type must exactly match the requested `QuoteType`. An individual listing, lowest-ask
+   aggregate, and median statistic are never mixed in one ranking.
+4. A quote is fresh when `0 <= as_of - observed_at <= max_quote_age`. The boundary is inclusive;
+   older and future-dated observations are reported separately.
+5. Exact repeated observations are included once. The repeated copies are marked `DUPLICATE`.
+   A listing observed at two different times remains two observations.
+6. Eligible prices are sorted ascending. Equal prices use marketplace, observation time, and
+   listing ID as deterministic tie-breakers.
+
+All calculations retain the original `Decimal` values. The service does not quantize or silently
+round. `spread` is `highest_price - lowest_price`; it is not a claim of profit.
+
+`LOWEST_ASK` identifies the cheapest marketplace-reported ask but does not guarantee the listing is
+still available. Use a separate `INDIVIDUAL_LISTING` comparison when the caller specifically wants
+listing-level observations. `MEDIAN_PRICE` can be ranked against other medians when explicitly
+requested, but it is never described as purchasable.
+
+### Currency and fees
+
+V1 compares one currency at a time and preserves every quote's original currency. It accepts no
+exchange-rate table and never calls an exchange-rate service.
+
+Results are **pre-fee**. No marketplace percentages, payout assumptions, wallet-to-cash equivalence,
+or sale proceeds are inferred. The current `QuoteType` model has no bid quote, so the service does
+not expose a sell-price or arbitrage operation.
+
+### Representative scenarios
+
+- Three fresh GBP lowest asks for the same exact item are ordered by price and summarized with an
+  exact spread.
+- A USD quote in a GBP comparison appears in `excluded_quotes` as `DIFFERENT_CURRENCY`.
+- A median alongside lowest asks is marked `DIFFERENT_QUOTE_TYPE`, preventing a historical or
+  aggregate statistic from becoming the apparent best buy.
+- A quote just inside the configured age is eligible; one microsecond beyond it is `STALE`.
+- If every quote is incompatible, `quotes` is empty and all summary prices are `None`.
+
+### Design tradeoffs
+
+Requiring one quote type per call is more explicit than trying to assign marketplace-specific
+confidence scores. Returning exclusions makes data loss observable while keeping the result small.
+Supplying `as_of` and the freshness duration on opposite sides of the service boundary makes the
+policy configurable without adding settings or a clock abstraction. Exact duplicate detection is
+conservative: the service does not guess that two similar quotes without listing IDs are the same
+listing.
+
+### Testing
+
+From `backend/`, run:
+
+```bash
+python -m pytest -q tests/test_pricing_service.py
+python -m pytest -q
+```
+
+The implementation was verified with Python 3.12: **29 pricing tests passed** and the complete
+backend suite completed with **139 tests passed**. Tests use synthetic data and require no network,
+database, credentials, or running marketplace.
+
+### Known limitations and extension points
+
+- Availability can change after observation; ranking does not reserve or validate a listing.
+- Tax, deposit, withdrawal, network, conversion, and marketplace fees are absent.
+- There is no currency conversion, sell-side quote type, profit calculation, recommendation, or
+  historical forecasting.
+- Canonical identity is only as detailed as `market_hash_name`; sticker, paint-seed, and float
+  distinctions are unavailable unless already encoded in that identifier.
+
+Future pricing rules should remain explicit inputs. A reliable exchange-rate mapping could be
+supplied to a separate conversion step that preserves original values. Verified fee schedules and
+sell-side comparisons should be added only after the domain model can distinguish gross asks,
+bids, buyer cost, wallet proceeds, and withdrawable proceeds. New exclusion rules can extend
+[`QuoteExclusionReason`](pricing.py) and `_exclusion_reason()` with focused test cases.
