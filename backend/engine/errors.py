@@ -16,3 +16,11 @@ class JobShutdownTimeout(JobError, TimeoutError):
 
 class SchedulerError(EngineError):
     """Raised for invalid scheduler lifecycle or registration operations."""
+
+
+class DuplicateMarketplaceError(EngineError):
+    """Raised when a marketplace identifier is already registered."""
+
+
+class UnknownMarketplaceError(EngineError):
+    """Raised when a marketplace identifier is not registered."""
