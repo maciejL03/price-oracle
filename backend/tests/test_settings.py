@@ -1,0 +1,122 @@
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from engine.config import EngineSettings
+from engine.jobs import JobHandler
+
+
+def test_default_settings_are_valid_and_typed() -> None:
+    settings = EngineSettings(_env_file=None, _secrets_dir=None)
+
+    assert settings.worker_count == 5
+    assert isinstance(settings.worker_count, int)
+    assert settings.job_queue_capacity == 100
+    assert isinstance(settings.job_queue_capacity, int)
+    assert settings.job_shutdown_timeout_seconds == 10.0
+    assert isinstance(settings.job_shutdown_timeout_seconds, float)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("worker_count", 0),
+        ("worker_count", -1),
+        ("job_queue_capacity", 0),
+        ("job_queue_capacity", -1),
+        ("job_shutdown_timeout_seconds", 0),
+        ("job_shutdown_timeout_seconds", -0.1),
+    ],
+)
+def test_non_positive_job_settings_are_rejected(field: str, value: int | float) -> None:
+    with pytest.raises(ValidationError) as error:
+        EngineSettings(_env_file=None, _secrets_dir=None, **{field: value})
+
+    assert error.value.errors()[0]["loc"] == (field,)
+    assert error.value.errors()[0]["type"] == "greater_than"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("worker_count", "many"),
+        ("job_queue_capacity", "unbounded"),
+        ("job_shutdown_timeout_seconds", "eventually"),
+    ],
+)
+def test_invalid_types_are_rejected(field: str, value: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        EngineSettings(_env_file=None, _secrets_dir=None, **{field: value})
+
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
+def test_settings_convert_supported_string_inputs() -> None:
+    settings = EngineSettings(
+        _env_file=None,
+        _secrets_dir=None,
+        worker_count="3",
+        job_queue_capacity="20",
+        job_shutdown_timeout_seconds="2.5",
+    )
+
+    assert settings.worker_count == 3
+    assert settings.job_queue_capacity == 20
+    assert settings.job_shutdown_timeout_seconds == 2.5
+
+
+def test_settings_dump_contains_only_validated_values() -> None:
+    settings = EngineSettings(
+        _env_file=None,
+        _secrets_dir=None,
+        worker_count=2,
+        job_queue_capacity=12,
+        job_shutdown_timeout_seconds=1.5,
+    )
+
+    assert settings.model_dump() == {
+        "worker_count": 2,
+        "job_queue_capacity": 12,
+        "job_shutdown_timeout_seconds": 1.5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_can_be_injected_into_job_handler() -> None:
+    settings = EngineSettings(
+        _env_file=None,
+        _secrets_dir=None,
+        worker_count=2,
+        job_queue_capacity=10,
+        job_shutdown_timeout_seconds=1.0,
+    )
+    handler = JobHandler(
+        worker_count=settings.worker_count,
+        queue_capacity=settings.job_queue_capacity,
+        shutdown_timeout=settings.job_shutdown_timeout_seconds,
+    )
+
+    await handler.start()
+    assert handler.running
+    await handler.stop()
+    assert not handler.running
+
+
+def test_invalid_settings_prevent_job_handler_construction() -> None:
+    handler: JobHandler | None = None
+
+    with pytest.raises(ValidationError):
+        settings = EngineSettings(_env_file=None, _secrets_dir=None, worker_count=0)
+        handler = JobHandler(worker_count=settings.worker_count)
+
+    assert handler is None
+
+
+def test_default_dotenv_path_is_relative_to_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / ".env").write_text("CS2_WORKER_COUNT=7\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert EngineSettings(_secrets_dir=None).worker_count == 7
