@@ -1,33 +1,27 @@
 # CS2 Price Oracle
 
-A small web app that compares Counter-Strike 2 item prices between **Steam Community Market** (GB / GBP) and **Skinport**.
+A self-hosted Counter-Strike 2 marketplace monitoring engine with a React price-comparison UI.
 
 ## Architecture
 
 The project is split into orthogonal layers so each concern can change independently:
 
 ```
-frontend/          React UI (search, cards, comparison)
-    └── api/       HTTP client only
+frontend/              React UI (unchanged)
+    └── api/           HTTP client only
 
 backend/
-    ├── engine/jobs/  Job execution and recurring scheduling
-    └── app/
-        ├── domain/    Pure models + comparison logic (no I/O)
-        ├── ports/     Abstract marketplace interfaces
-        ├── adapters/  Steam, Skinport, ByMykel implementations
-        ├── services/  Orchestration (search + compare)
-        └── api/       FastAPI routes + response schemas
+    ├── engine/        Engine services, storage, marketplaces, jobs, and API
+    │   └── api/       FastAPI routes and HTTP schemas
+    └── app/main.py    Compatibility ASGI entry point
 ```
 
 | Layer | Responsibility |
 |-------|----------------|
-| **engine/jobs** | [Bounded asynchronous jobs and recurring scheduling](backend/engine/jobs/README.md) |
-| **domain** | `CatalogItem`, `SteamPrice`, `SkinportPrice`, `PriceComparison` |
-| **ports** | `ItemCatalog`, `SteamMarket`, `SkinportMarket` interfaces |
-| **adapters** | External API clients (ByMykel, Steam, Skinport) |
-| **services** | Business workflows built from ports |
-| **api** | HTTP transport; maps domain → JSON |
+| **engine** | Collection, pricing, storage, watchlists, alerts, notifications, and lifecycle |
+| **engine/catalog** | Canonical item metadata and deterministic search |
+| **engine/marketplaces** | CSFloat, Steam, and Skinport provider normalization |
+| **engine/api** | Thin FastAPI transport and website-contract adapters |
 
 ## Data sources
 
@@ -75,15 +69,19 @@ Open [http://localhost:5173](http://localhost:5173).
 
 ## Configuration
 
-Backend settings live in `backend/app/config.py` (overridable via environment variables):
+Engine settings live in `backend/engine/config/settings.py` and use the `CS2_` environment prefix:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STEAM_COUNTRY` | `GB` | Steam market region |
-| `STEAM_CURRENCY` | `2` | Steam currency code (GBP) |
-| `SKINPORT_CURRENCY` | `GBP` | Skinport currency |
-| `ITEMS_CACHE_TTL_SECONDS` | `86400` | ByMykel cache TTL |
-| `SKINPORT_CACHE_TTL_SECONDS` | `300` | Skinport cache TTL |
+| `CS2_STEAM_COUNTRY` | `GB` | Steam market region |
+| `CS2_STEAM_CURRENCY` | `GBP` | Steam market currency |
+| `CS2_SKINPORT_CURRENCY` | `GBP` | Skinport currency |
+| `CS2_CACHE_DIR` | `.cache` | Catalog and marketplace cache directory |
+| `CS2_CATALOG_CACHE_TTL_SECONDS` | `86400` | ByMykel cache TTL |
+| `CS2_SKINPORT_CACHE_TTL_SECONDS` | `300` | Skinport cache TTL |
+
+See the [engine API README](backend/engine/api/README.md) for lifecycle ownership, full routes,
+contracts, engine integration, and migration status.
 
 ## License
 

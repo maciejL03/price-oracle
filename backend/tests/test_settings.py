@@ -106,6 +106,7 @@ def test_settings_dump_contains_only_validated_values() -> None:
         "job_queue_capacity": 12,
         "job_shutdown_timeout_seconds": 1.5,
         "database_path": Path("state/quotes.sqlite3"),
+        "cache_dir": Path(".cache"),
         "database_busy_timeout_seconds": 0.75,
         "scheduler_poll_seconds": 0.1,
         "quote_max_age_seconds": 300.0,
@@ -114,6 +115,24 @@ def test_settings_dump_contains_only_validated_values() -> None:
         "csfloat_api_key": None,
         "csfloat_timeout_seconds": 10.0,
         "discord_webhook_url": None,
+        "catalog_url": (
+            "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/all.json"
+        ),
+        "catalog_cache_ttl_seconds": 86400.0,
+        "steam_country": "GB",
+        "steam_currency_code": 2,
+        "steam_currency": "GBP",
+        "steam_app_id": 730,
+        "skinport_currency": "GBP",
+        "skinport_base_url": "https://api.skinport.com/v1",
+        "skinport_cache_ttl_seconds": 300.0,
+        "http_timeout_seconds": 30.0,
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "cors_origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
     }
 
 
