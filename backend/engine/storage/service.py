@@ -10,7 +10,9 @@ from uuid import UUID
 from engine.alerts.models import AlertEvent, AlertRule
 from engine.errors import StorageBusyError, StorageError
 from engine.models import Item, MarketQuote, QuoteType
+from engine.notifications.models import DeliveryStatus, NotificationDelivery
 from sqlalchemy import Select, delete, func, or_, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -24,6 +26,7 @@ from .models import (
     AlertRuleRecord,
     AlertRuleStateRecord,
     Base,
+    NotificationDeliveryRecord,
     QuoteRecord,
 )
 
@@ -378,6 +381,114 @@ class StorageService:
         except (TypeError, ValueError) as exc:
             message = "list alert events returned invalid persisted data"
             raise StorageError(message) from exc
+
+    async def claim_notification_delivery(
+        self, delivery: NotificationDelivery
+    ) -> bool:
+        """Atomically claim an alert event for at most one delivery caller."""
+        self._ensure_ready()
+        if not isinstance(delivery, NotificationDelivery):
+            raise TypeError("delivery must be a NotificationDelivery")
+        if delivery.status is not DeliveryStatus.PENDING:
+            raise ValueError("a notification claim must be pending")
+
+        record = NotificationDeliveryRecord.from_domain(delivery)
+        statement = (
+            sqlite_insert(NotificationDeliveryRecord)
+            .values(
+                event_id=record.event_id,
+                channel=record.channel,
+                status=record.status,
+                attempts=record.attempts,
+                started_at=record.started_at,
+                completed_at=record.completed_at,
+                failure_code=record.failure_code,
+                failure_detail=record.failure_detail,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    result = await session.execute(statement)
+                    claimed = result.rowcount == 1
+        except SQLAlchemyError as exc:
+            raise _translate_database_error(
+                "claim notification delivery", exc
+            ) from exc
+        return claimed
+
+    async def get_notification_delivery(
+        self, event_id: UUID
+    ) -> NotificationDelivery | None:
+        """Return the durable delivery state for an alert event, if present."""
+        self._ensure_ready()
+        if not isinstance(event_id, UUID):
+            raise TypeError("event_id must be a UUID")
+        statement = select(NotificationDeliveryRecord).where(
+            NotificationDeliveryRecord.event_id == str(event_id)
+        )
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    record = await session.scalar(statement)
+        except SQLAlchemyError as exc:
+            raise _translate_database_error(
+                "get notification delivery", exc
+            ) from exc
+
+        if record is None:
+            return None
+        try:
+            return NotificationDelivery.model_validate(record.to_domain_values())
+        except (TypeError, ValueError) as exc:
+            raise StorageError(
+                "get notification delivery returned invalid persisted data"
+            ) from exc
+
+    async def complete_notification_delivery(
+        self, delivery: NotificationDelivery
+    ) -> None:
+        """Persist a claimed delivery's final success or failure outcome."""
+        self._ensure_ready()
+        if not isinstance(delivery, NotificationDelivery):
+            raise TypeError("delivery must be a NotificationDelivery")
+        if delivery.status is DeliveryStatus.PENDING:
+            raise ValueError("a completed notification delivery cannot be pending")
+
+        statement = (
+            update(NotificationDeliveryRecord)
+            .where(
+                NotificationDeliveryRecord.event_id == str(delivery.event_id),
+                NotificationDeliveryRecord.status == DeliveryStatus.PENDING.value,
+            )
+            .values(
+                channel=delivery.channel,
+                status=delivery.status.value,
+                attempts=delivery.attempts,
+                started_at=delivery.started_at,
+                completed_at=delivery.completed_at,
+                failure_code=(
+                    None
+                    if delivery.failure_code is None
+                    else delivery.failure_code.value
+                ),
+                failure_detail=delivery.failure_detail,
+            )
+        )
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    result = await session.execute(statement)
+                    if result.rowcount != 1:
+                        raise StorageError(
+                            "could not complete notification delivery: "
+                            "pending claim does not exist"
+                        )
+        except SQLAlchemyError as exc:
+            raise _translate_database_error(
+                "complete notification delivery", exc
+            ) from exc
 
     async def _read_quotes(
         self,

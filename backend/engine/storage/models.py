@@ -6,6 +6,11 @@ from typing import Any
 
 from engine.alerts.models import AlertCondition, AlertEvent, AlertRule
 from engine.models import MarketQuote, QuoteType
+from engine.notifications.models import (
+    DeliveryFailureCode,
+    DeliveryStatus,
+    NotificationDelivery,
+)
 from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
@@ -244,4 +249,74 @@ class AlertEventRecord(Base):
             "condition": AlertCondition(self.condition),
             "threshold": self.threshold,
             "triggered_at": self.triggered_at,
+        }
+
+
+class NotificationDeliveryRecord(Base):
+    """Durable claim and outcome for delivery of one alert event."""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        CheckConstraint(
+            "channel = 'discord'", name="ck_notification_channel_supported"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'succeeded', 'failed')",
+            name="ck_notification_status_known",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_notification_attempts_non_negative"),
+        CheckConstraint(
+            "failure_code IS NULL OR failure_code IN "
+            "('network_error', 'timeout', 'rate_limited', 'provider_error')",
+            name="ck_notification_failure_code_known",
+        ),
+        Index("ix_notification_deliveries_status", "status", "started_at"),
+    )
+
+    event_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("alert_events.id"),
+        primary_key=True,
+    )
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTimeText(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTimeText(), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @classmethod
+    def from_domain(
+        cls, delivery: NotificationDelivery
+    ) -> "NotificationDeliveryRecord":
+        return cls(
+            event_id=str(delivery.event_id),
+            channel=delivery.channel,
+            status=delivery.status.value,
+            attempts=delivery.attempts,
+            started_at=delivery.started_at,
+            completed_at=delivery.completed_at,
+            failure_code=(
+                None if delivery.failure_code is None else delivery.failure_code.value
+            ),
+            failure_detail=delivery.failure_detail,
+        )
+
+    def to_domain_values(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "channel": self.channel,
+            "status": DeliveryStatus(self.status),
+            "attempts": self.attempts,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "failure_code": (
+                None
+                if self.failure_code is None
+                else DeliveryFailureCode(self.failure_code)
+            ),
+            "failure_detail": self.failure_detail,
         }

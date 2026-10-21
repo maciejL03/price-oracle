@@ -10,6 +10,26 @@ class StorageBusyError(StorageError):
     """Raised when SQLite remains locked after its configured busy timeout."""
 
 
+class NotificationError(EngineError):
+    """Base exception for notification configuration and delivery state errors."""
+
+
+class NotificationConfigurationError(NotificationError, ValueError):
+    """Raised when notification delivery is not configured safely."""
+
+
+class MissingNotificationCredentialsError(NotificationConfigurationError):
+    """Raised when the configured channel has no credentials."""
+
+
+class InvalidNotificationDestinationError(NotificationConfigurationError):
+    """Raised when a notification destination is malformed or unsafe."""
+
+
+class NotificationStateError(NotificationError):
+    """Raised when notification persistence violates its service contract."""
+
+
 class JobError(EngineError):
     """Base exception for job execution infrastructure failures."""
 

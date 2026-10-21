@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DOCKER_SECRETS_DIR = Path("/run/secrets")
@@ -23,3 +23,4 @@ class EngineSettings(BaseSettings):
     job_shutdown_timeout_seconds: Annotated[float, Field(gt=0)] = 10.0
     database_path: Path = Path("data/engine.sqlite3")
     database_busy_timeout_seconds: Annotated[float, Field(gt=0)] = 5.0
+    discord_webhook_url: SecretStr | None = None
