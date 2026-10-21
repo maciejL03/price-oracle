@@ -54,6 +54,18 @@ The event is returned only after commit, so concurrent evaluation cannot generat
 for one transition and an insert failure cannot leave the rule incorrectly active. Rules and states
 can be deleted while historical events remain available through `list_alert_events()`.
 
+## Notification persistence
+
+`StorageService` implements the narrow persistence protocol used by
+[`NotificationService`](../notifications/README.md). `claim_notification_delivery()` atomically
+inserts one pending row per alert-event ID; a conflict reports that the event was already claimed.
+`get_notification_delivery()` returns its validated state, and
+`complete_notification_delivery()` changes a pending claim to a succeeded or failed outcome.
+
+The delivery row references the durable alert event and stores no webhook URL, token, provider
+response body, or raw network exception. This database boundary suppresses duplicate callers, but
+it cannot make an external Discord request and a SQLite transaction exactly once together.
+
 ## SQLite behavior
 
 File-backed databases use WAL mode for concurrent readers and SQLite's normal single-writer

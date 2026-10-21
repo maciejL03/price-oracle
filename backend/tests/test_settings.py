@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from engine.config import EngineSettings
 from engine.jobs import JobHandler
@@ -20,6 +20,7 @@ def test_default_settings_are_valid_and_typed() -> None:
     assert isinstance(settings.database_path, Path)
     assert settings.database_busy_timeout_seconds == 5.0
     assert isinstance(settings.database_busy_timeout_seconds, float)
+    assert settings.discord_webhook_url is None
 
 
 @pytest.mark.parametrize(
@@ -94,7 +95,22 @@ def test_settings_dump_contains_only_validated_values() -> None:
         "job_shutdown_timeout_seconds": 1.5,
         "database_path": Path("state/quotes.sqlite3"),
         "database_busy_timeout_seconds": 0.75,
+        "discord_webhook_url": None,
     }
+
+
+def test_discord_webhook_is_loaded_as_a_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "notification-secret-token"
+    webhook_url = f"https://discord.com/api/webhooks/123/{token}"
+    monkeypatch.setenv("CS2_DISCORD_WEBHOOK_URL", webhook_url)
+
+    settings = EngineSettings(_env_file=None, _secrets_dir=None)
+
+    assert isinstance(settings.discord_webhook_url, SecretStr)
+    assert settings.discord_webhook_url.get_secret_value() == webhook_url
+    assert token not in repr(settings)
 
 
 @pytest.mark.asyncio
