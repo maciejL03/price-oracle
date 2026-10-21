@@ -17,6 +17,10 @@ frontend/.vite/
 backend/.cache/
 *.log
 
+# Deployment credentials
+secrets/
+compose.secrets.yaml
+
 # IDE
 .vscode/
 .idea/

@@ -1,0 +1,7 @@
+# Dependencies used by the standalone MarketEngine container.
+httpx>=0.28.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+brotli>=1.1.0
+SQLAlchemy[asyncio]>=2.0.0,<3.0.0
+aiosqlite>=0.20.0
