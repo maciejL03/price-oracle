@@ -8,13 +8,20 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from engine.alerts import AlertService
+from engine.catalog import ByMykelItemCatalog
 from engine.config import EngineSettings
 from engine.jobs import FetchMarketJob, JobHandler, JobScheduler
 from engine.market_engine import AsyncCloser, MarketEngine
-from engine.marketplaces import CSFloatMarketplace, Marketplace, MarketplaceRegistry
+from engine.marketplaces import (
+    CSFloatMarketplace,
+    Marketplace,
+    MarketplaceRegistry,
+    SkinportMarketplace,
+    SteamMarketplace,
+)
 from engine.models import Item, MarketQuote, QuoteType
 from engine.notifications import NotificationService
-from engine.services import CollectionService, PricingService
+from engine.services import CollectionService, MarketplaceComparisonService, PricingService
 from engine.storage import StorageService
 from engine.watchlists import WatchlistService
 
@@ -38,6 +45,8 @@ def create_market_engine(
 
     owned_closers: list[AsyncCloser] = []
     providers: tuple[Marketplace, ...]
+    catalog: ByMykelItemCatalog | None = None
+    comparisons: MarketplaceComparisonService | None = None
     if marketplaces is None:
         configured: list[Marketplace] = []
         if actual_settings.csfloat_enabled:
@@ -51,6 +60,33 @@ def create_market_engine(
                 timeout=actual_settings.csfloat_timeout_seconds,
             )
             configured.append(csfloat)
+        catalog = ByMykelItemCatalog(
+            url=actual_settings.catalog_url,
+            cache_path=actual_settings.cache_dir / "bymykel_items.json",
+            cache_ttl_seconds=actual_settings.catalog_cache_ttl_seconds,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        steam = SteamMarketplace(
+            country=actual_settings.steam_country,
+            currency_code=actual_settings.steam_currency_code,
+            currency=actual_settings.steam_currency,
+            app_id=actual_settings.steam_app_id,
+            user_agent=actual_settings.user_agent,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        skinport = SkinportMarketplace(
+            currency=actual_settings.skinport_currency,
+            app_id=actual_settings.steam_app_id,
+            base_url=actual_settings.skinport_base_url,
+            cache_path=(
+                actual_settings.cache_dir
+                / f"skinport_{actual_settings.skinport_currency.lower()}.json"
+            ),
+            cache_ttl_seconds=actual_settings.skinport_cache_ttl_seconds,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        configured.extend((steam, skinport))
+        owned_closers.extend((catalog.aclose, steam.aclose, skinport.aclose))
         providers = tuple(configured)
     else:
         providers = tuple(marketplaces)
@@ -65,6 +101,14 @@ def create_market_engine(
     collection = CollectionService(registry)
     max_quote_age = timedelta(seconds=actual_settings.quote_max_age_seconds)
     pricing = PricingService(max_quote_age=max_quote_age)
+    if catalog is not None:
+        comparisons = MarketplaceComparisonService(
+            catalog,
+            steam,
+            skinport,
+            pricing,
+            currency=actual_settings.steam_currency,
+        )
     alerts = AlertService(storage, max_quote_age=max_quote_age)
 
     notifications: NotificationService | None = None
@@ -124,6 +168,8 @@ def create_market_engine(
         alerts=alerts,
         notifications=notifications,
         owned_resource_closers=owned_closers,
+        catalog=catalog,
+        comparisons=comparisons,
     )
 
 
