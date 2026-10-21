@@ -5,20 +5,27 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
-from sqlalchemy import Select, func, select
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.sql.elements import ColumnElement
-
+from engine.alerts.models import AlertEvent, AlertRule
 from engine.errors import StorageBusyError, StorageError
 from engine.models import Item, MarketQuote, QuoteType
+from sqlalchemy import Select, delete, func, or_, select, update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.sql.elements import ColumnElement
 
 from .database import (
     IN_MEMORY_DATABASE,
     create_database_parent,
     create_database_resources,
 )
-from .models import Base, QuoteRecord
+from .models import (
+    AlertEventRecord,
+    AlertRuleRecord,
+    AlertRuleStateRecord,
+    Base,
+    QuoteRecord,
+)
 
 
 class StorageService:
@@ -188,6 +195,189 @@ class StorageService:
         if limit is not None:
             statement = statement.limit(limit)
         return await self._read_quotes(statement, "get price history")
+
+    async def save_alert_rule(self, rule: AlertRule) -> None:
+        """Persist a rule and its initially inactive edge-trigger state."""
+        self._ensure_ready()
+        if not isinstance(rule, AlertRule):
+            raise TypeError("rule must be an AlertRule")
+
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    session.add(AlertRuleRecord.from_domain(rule))
+                    session.add(
+                        AlertRuleStateRecord(rule_id=str(rule.id), is_active=False)
+                    )
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("save alert rule", exc) from exc
+
+    async def list_alert_rules(
+        self,
+        *,
+        market_hash_name: str | None = None,
+        marketplace: str | None = None,
+        currency: str | None = None,
+        quote_type: QuoteType | None = None,
+    ) -> list[AlertRule]:
+        """Return rules matching every supplied observation attribute."""
+        self._ensure_ready()
+        filters: list[ColumnElement[bool]] = []
+        if market_hash_name is not None:
+            filters.append(AlertRuleRecord.market_hash_name == market_hash_name)
+        if marketplace is not None:
+            filters.append(AlertRuleRecord.marketplace == marketplace)
+        if currency is not None:
+            filters.append(AlertRuleRecord.currency == currency)
+        if quote_type is not None:
+            filters.append(AlertRuleRecord.quote_type == quote_type.value)
+        statement = select(AlertRuleRecord).where(*filters).order_by(AlertRuleRecord.id)
+
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    records = list((await session.scalars(statement)).all())
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("list alert rules", exc) from exc
+
+        try:
+            return [
+                AlertRule.model_validate(record.to_domain_values())
+                for record in records
+            ]
+        except (TypeError, ValueError) as exc:
+            message = "list alert rules returned invalid persisted data"
+            raise StorageError(message) from exc
+
+    async def delete_alert_rule(self, rule_id: UUID) -> bool:
+        """Delete a rule and its state without deleting historical events."""
+        self._ensure_ready()
+        if not isinstance(rule_id, UUID):
+            raise TypeError("rule_id must be a UUID")
+
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        delete(AlertRuleRecord).where(
+                            AlertRuleRecord.id == str(rule_id)
+                        )
+                    )
+                    deleted = result.rowcount == 1
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("delete alert rule", exc) from exc
+        return deleted
+
+    async def commit_alert_evaluation(
+        self,
+        rule_id: UUID,
+        *,
+        observation: MarketQuote,
+        condition_active: bool,
+        candidate_event: AlertEvent,
+    ) -> AlertEvent | None:
+        """Atomically advance rule state and persist a newly active event.
+
+        Only observations newer than the stored timestamp can mutate state. A
+        conditional update claims an inactive-to-active transition before the
+        candidate event is inserted in the same transaction.
+        """
+        self._ensure_ready()
+        if not isinstance(rule_id, UUID):
+            raise TypeError("rule_id must be a UUID")
+        if not isinstance(observation, MarketQuote):
+            raise TypeError("observation must be a MarketQuote")
+        if not isinstance(condition_active, bool):
+            raise TypeError("condition_active must be a bool")
+        if not isinstance(candidate_event, AlertEvent):
+            raise TypeError("candidate_event must be an AlertEvent")
+        if candidate_event.rule_id != rule_id:
+            raise ValueError("candidate_event rule_id does not match rule_id")
+        if candidate_event.quote != observation:
+            raise ValueError("candidate_event quote does not match observation")
+
+        newer_observation = or_(
+            AlertRuleStateRecord.last_observed_at.is_(None),
+            AlertRuleStateRecord.last_observed_at < observation.observed_at,
+        )
+        committed_event: AlertEvent | None = None
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    if condition_active:
+                        transition = await session.execute(
+                            update(AlertRuleStateRecord)
+                            .where(
+                                AlertRuleStateRecord.rule_id == str(rule_id),
+                                AlertRuleStateRecord.is_active.is_(False),
+                                newer_observation,
+                            )
+                            .values(
+                                is_active=True,
+                                last_observed_at=observation.observed_at,
+                            )
+                        )
+                        if transition.rowcount == 1:
+                            session.add(AlertEventRecord.from_domain(candidate_event))
+                            committed_event = candidate_event
+                        else:
+                            await session.execute(
+                                update(AlertRuleStateRecord)
+                                .where(
+                                    AlertRuleStateRecord.rule_id == str(rule_id),
+                                    AlertRuleStateRecord.is_active.is_(True),
+                                    newer_observation,
+                                )
+                                .values(last_observed_at=observation.observed_at)
+                            )
+                    else:
+                        await session.execute(
+                            update(AlertRuleStateRecord)
+                            .where(
+                                AlertRuleStateRecord.rule_id == str(rule_id),
+                                newer_observation,
+                            )
+                            .values(
+                                is_active=False,
+                                last_observed_at=observation.observed_at,
+                            )
+                        )
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("commit alert evaluation", exc) from exc
+        return committed_event
+
+    async def list_alert_events(
+        self,
+        *,
+        rule_id: UUID | None = None,
+    ) -> list[AlertEvent]:
+        """Return durable alert events in trigger order."""
+        self._ensure_ready()
+        statement = select(AlertEventRecord)
+        if rule_id is not None:
+            if not isinstance(rule_id, UUID):
+                raise TypeError("rule_id must be a UUID")
+            statement = statement.where(AlertEventRecord.rule_id == str(rule_id))
+        statement = statement.order_by(
+            AlertEventRecord.triggered_at,
+            AlertEventRecord.id,
+        )
+
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    records = list((await session.scalars(statement)).all())
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("list alert events", exc) from exc
+
+        try:
+            return [
+                AlertEvent.model_validate(record.to_domain_values())
+                for record in records
+            ]
+        except (TypeError, ValueError) as exc:
+            message = "list alert events returned invalid persisted data"
+            raise StorageError(message) from exc
 
     async def _read_quotes(
         self,
