@@ -23,7 +23,7 @@ flowchart TD
     Commit -->|No new edge| Next
     Commit -->|Inactive to active| Durable[Durable AlertEvent]
     Durable --> Return[Return event to caller]
-    Return -. future integration .-> Notification[NotificationService]
+    Return -->|bootstrap post-persistence hook| Notification[NotificationService]
 ```
 
 ## Edge-trigger lifecycle
@@ -181,7 +181,7 @@ From `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-The alert module has **37 passing tests**. The complete backend suite has **291 passing tests**.
+The alert module has **37 passing tests**. The complete backend suite has **369 passing tests**.
 Tests use synthetic market data and temporary SQLite databases; they make no marketplace or
 notification calls and require no credentials. Coverage includes both conditions, equality,
 precision, all compatibility dimensions, invalid configuration, freshness, duplicate suppression,
@@ -197,9 +197,8 @@ and compatibility with the pricing result model.
 - Only marketplace `LOWEST_ASK` observations are supported.
 - Equal-timestamp observations are treated as duplicate deliveries. A future ingestion sequence ID
   would be needed to order distinct updates that share a timestamp.
-- Event acknowledgement, notification delivery, retries, and dead-letter handling are not present.
-  A future `NotificationService` may consume the returned `AlertEvent` or query durable events, but
-  it must remain separate from evaluation.
+- `MarketEngine` passes returned events to `NotificationService` when a webhook is configured.
+  There is no separate durable event dispatcher, acknowledgement UI, or dead-letter handling.
 - Tables are created through the repository's existing `create_all` lifecycle. Deployments that later
   adopt schema migrations must add these tables to that migration system.
 - No fee adjustment, currency conversion, marketplace availability check, advanced opportunity

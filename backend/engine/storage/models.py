@@ -11,7 +11,7 @@ from engine.notifications.models import (
     DeliveryStatus,
     NotificationDelivery,
 )
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, Integer, Text
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator
 
@@ -117,6 +117,47 @@ class QuoteRecord(Base):
             "quote_type": QuoteType(self.quote_type),
             "external_listing_id": self.external_listing_id,
         }
+
+
+class WatchlistRecord(Base):
+    """Persistent root of one watchlist aggregate."""
+
+    __tablename__ = "watchlists"
+    __table_args__ = (
+        CheckConstraint("length(name) > 0", name="ck_watchlist_name_present"),
+        CheckConstraint(
+            "interval_seconds > 0", name="ck_watchlist_interval_positive"
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    interval_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class WatchlistEntryRecord(Base):
+    """One marketplace association for an item in a watchlist."""
+
+    __tablename__ = "watchlist_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "length(market_hash_name) > 0",
+            name="ck_watchlist_entry_item_present",
+        ),
+        CheckConstraint(
+            "length(marketplace) > 0",
+            name="ck_watchlist_entry_marketplace_present",
+        ),
+        Index("ix_watchlist_entries_watchlist", "watchlist_id"),
+    )
+
+    watchlist_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("watchlists.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    market_hash_name: Mapped[str] = mapped_column(Text, primary_key=True)
+    marketplace: Mapped[str] = mapped_column(Text, primary_key=True)
 
 
 class AlertRuleRecord(Base):

@@ -172,7 +172,7 @@ From `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-The notification module has **21 passing tests**. The complete backend suite has **349 passing
+The notification module has **21 passing tests**. The complete backend suite has **369 passing
 tests**. Tests use `httpx.MockTransport`, fake storage, and temporary SQLite databases; they make no
 real network requests and require no credentials.
 
@@ -185,8 +185,8 @@ objects.
 ## Known limitations
 
 - Discord webhooks are the only V1 channel, with one configured destination per service.
-- Notification invocation is not yet wired into a job or application composition root; the caller
-  passes events returned by `AlertService` to `deliver()`.
+- Bootstrap wires notification delivery after persisted lowest-ask alert evaluation. There is no
+  independent event-dispatch worker for replaying older durable events.
 - There is no automatic recovery, lease, operator acknowledgement, dead-letter queue, or dashboard
   for `pending` and `failed` records.
 - A network failure can be ambiguous: Discord may accept a request even if the client does not

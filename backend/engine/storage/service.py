@@ -11,6 +11,7 @@ from engine.alerts.models import AlertEvent, AlertRule
 from engine.errors import StorageBusyError, StorageError
 from engine.models import Item, MarketQuote, QuoteType
 from engine.notifications.models import DeliveryStatus, NotificationDelivery
+from engine.watchlists.models import Watchlist, WatchlistItem
 from sqlalchemy import Select, delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -28,6 +29,8 @@ from .models import (
     Base,
     NotificationDeliveryRecord,
     QuoteRecord,
+    WatchlistEntryRecord,
+    WatchlistRecord,
 )
 
 
@@ -198,6 +201,127 @@ class StorageService:
         if limit is not None:
             statement = statement.limit(limit)
         return await self._read_quotes(statement, "get price history")
+
+    async def list_watchlists(self) -> list[Watchlist]:
+        """Return all persisted watchlists with their item associations."""
+        self._ensure_ready()
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    watchlists = list(
+                        (
+                            await session.scalars(
+                                select(WatchlistRecord).order_by(WatchlistRecord.id)
+                            )
+                        ).all()
+                    )
+                    entries = list(
+                        (
+                            await session.scalars(
+                                select(WatchlistEntryRecord).order_by(
+                                    WatchlistEntryRecord.watchlist_id,
+                                    WatchlistEntryRecord.market_hash_name,
+                                    WatchlistEntryRecord.marketplace,
+                                )
+                            )
+                        ).all()
+                    )
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("list watchlists", exc) from exc
+        return _build_watchlists(watchlists, entries)
+
+    async def get_watchlist(self, watchlist_id: UUID) -> Watchlist | None:
+        """Return one persisted watchlist aggregate, if it exists."""
+        self._ensure_ready()
+        if not isinstance(watchlist_id, UUID):
+            raise TypeError("watchlist_id must be a UUID")
+        identifier = str(watchlist_id)
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    watchlist = await session.scalar(
+                        select(WatchlistRecord).where(WatchlistRecord.id == identifier)
+                    )
+                    if watchlist is None:
+                        return None
+                    entries = list(
+                        (
+                            await session.scalars(
+                                select(WatchlistEntryRecord)
+                                .where(
+                                    WatchlistEntryRecord.watchlist_id == identifier
+                                )
+                                .order_by(
+                                    WatchlistEntryRecord.market_hash_name,
+                                    WatchlistEntryRecord.marketplace,
+                                )
+                            )
+                        ).all()
+                    )
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("get watchlist", exc) from exc
+        return _build_watchlists([watchlist], entries)[0]
+
+    async def save_watchlist(self, watchlist: Watchlist) -> None:
+        """Atomically create or replace a complete watchlist aggregate."""
+        self._ensure_ready()
+        if not isinstance(watchlist, Watchlist):
+            raise TypeError("watchlist must be a Watchlist")
+        identifier = str(watchlist.id)
+        statement = (
+            sqlite_insert(WatchlistRecord)
+            .values(
+                id=identifier,
+                name=watchlist.name,
+                interval_seconds=watchlist.interval_seconds,
+            )
+            .on_conflict_do_update(
+                index_elements=["id"],
+                set_={
+                    "name": watchlist.name,
+                    "interval_seconds": watchlist.interval_seconds,
+                },
+            )
+        )
+        entries = [
+            WatchlistEntryRecord(
+                watchlist_id=identifier,
+                market_hash_name=entry.item.market_hash_name,
+                marketplace=marketplace,
+            )
+            for entry in watchlist.items
+            for marketplace in sorted(entry.marketplaces)
+        ]
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    await session.execute(statement)
+                    await session.execute(
+                        delete(WatchlistEntryRecord).where(
+                            WatchlistEntryRecord.watchlist_id == identifier
+                        )
+                    )
+                    session.add_all(entries)
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("save watchlist", exc) from exc
+
+    async def delete_watchlist(self, watchlist_id: UUID) -> bool:
+        """Atomically delete a watchlist and all of its associations."""
+        self._ensure_ready()
+        if not isinstance(watchlist_id, UUID):
+            raise TypeError("watchlist_id must be a UUID")
+        try:
+            async with self._sessions() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        delete(WatchlistRecord).where(
+                            WatchlistRecord.id == str(watchlist_id)
+                        )
+                    )
+                    deleted = result.rowcount == 1
+        except SQLAlchemyError as exc:
+            raise _translate_database_error("delete watchlist", exc) from exc
+        return deleted
 
     async def save_alert_rule(self, rule: AlertRule) -> None:
         """Persist a rule and its initially inactive edge-trigger state."""
@@ -544,6 +668,38 @@ def _normalize_query_datetime(
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _build_watchlists(
+    records: Iterable[WatchlistRecord],
+    entries: Iterable[WatchlistEntryRecord],
+) -> list[Watchlist]:
+    grouped: dict[str, dict[str, set[str]]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.watchlist_id, {}).setdefault(
+            entry.market_hash_name, set()
+        ).add(entry.marketplace)
+
+    try:
+        return [
+            Watchlist(
+                id=UUID(record.id),
+                name=record.name,
+                interval_seconds=record.interval_seconds,
+                items=tuple(
+                    WatchlistItem(
+                        item=Item(market_hash_name=market_hash_name),
+                        marketplaces=marketplaces,
+                    )
+                    for market_hash_name, marketplaces in grouped.get(
+                        record.id, {}
+                    ).items()
+                ),
+            )
+            for record in records
+        ]
+    except (TypeError, ValueError) as exc:
+        raise StorageError("stored watchlist data is invalid") from exc
 
 
 def _translate_database_error(operation: str, error: BaseException) -> StorageError:
