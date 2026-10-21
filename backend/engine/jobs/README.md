@@ -35,6 +35,7 @@ flowchart LR
 | Code | Responsibility | Deliberately does not do |
 |---|---|---|
 | [`base.py`](base.py) | Defines the job contract and stable identity | Scheduling, retries, or shared state |
+| [`fetch_market.py`](fetch_market.py) | Collects and persists one marketplace/item observation batch | HTTP, normalization, retries, or scheduling |
 | [`handler.py`](handler.py) | Bounds, deduplicates, and executes accepted work | Recurring scheduling |
 | [`scheduler.py`](scheduler.py) | Tracks recurring definitions and submits due instances | Executes jobs directly |
 | [`../errors.py`](../errors.py) | Defines engine and job-system errors | Encodes every possible failure as a custom type |
@@ -87,7 +88,130 @@ Job failures are contained at the worker boundary. They are logged with the job 
 the key is released, and the worker continues with the next job. See
 [`JobHandler._worker()`](handler.py#L126).
 
-## 2. Handler: bounded execution
+## 2. FetchMarketJob: one collection operation
+
+[`FetchMarketJob`](fetch_market.py) is the concrete job that connects the collection and storage
+boundaries. It exists so a one-off or scheduled market fetch follows the same bounded execution and
+duplicate-prevention path as every other engine job.
+
+```mermaid
+sequenceDiagram
+    participant H as JobHandler
+    participant J as FetchMarketJob
+    participant C as CollectionService
+    participant M as Marketplace
+    participant S as StorageService
+
+    H->>J: await execute()
+    J->>C: await collect(marketplace, item)
+    C->>M: await fetch(item)
+    M-->>C: list[MarketQuote]
+    C-->>J: normalized observations
+    J->>S: await save_quotes(quotes)
+    S-->>J: persistence complete
+    J-->>H: return
+```
+
+### Public class and methods
+
+The class is exported from [`engine.jobs`](__init__.py):
+
+```python
+from engine.jobs import FetchMarketJob
+
+job = FetchMarketJob(
+    "csfloat",
+    item,
+    collection_service,
+    storage_service,
+)
+
+job.key                 # stable str identity
+await job.execute()     # one collection and persistence operation
+```
+
+The constructor receives a marketplace identifier, an [`Item`](../models/item.py), and shared
+[`CollectionService`](../services/collection.py) and
+[`StorageService`](../storage/service.py) instances. Injecting the services keeps provider and
+database construction outside the job and permits isolated tests. In particular, all fetch jobs in
+one process should normally share a `CollectionService` so its provider admission controls apply
+across concurrent jobs.
+
+`execute()` calls `CollectionService.collect(marketplace, item)` exactly once. It passes the
+returned `list[MarketQuote]` unchanged to `StorageService.save_quotes()` and awaits the write before
+returning. An empty successful result is still passed to storage; the existing storage contract
+treats it as a no-op, and the job does not fabricate an observation.
+
+### Identity and lifecycle
+
+The key has this form:
+
+```text
+fetch-market:<percent-encoded marketplace>:<percent-encoded market_hash_name>
+```
+
+Percent-encoding each component prevents a delimiter inside an identifier from making two
+different requests look alike. Equivalent marketplace/item pairs therefore share a key, while a
+different marketplace or exact Steam market hash name gets a different key. The current `Item` and
+collection contracts have no other query parameters. If those contracts gain a meaningful fetch
+parameter, the key must include its canonical representation before that parameter is used.
+
+Each instance represents one execution and becomes complete after storage returns. It does not
+schedule itself, create tasks, own a worker, or retry. `JobHandler` prevents a second job with the
+same key from being queued or run while the first is active. `JobScheduler` can recur the operation
+by registering that same key with a factory that creates a fresh `FetchMarketJob`.
+
+### Errors and cancellation
+
+The job does not catch collection, provider, validation, or storage exceptions. A collection
+failure prevents the storage call; a storage failure prevents successful completion. Direct callers
+receive the original exception. When run by `JobHandler`, its existing worker boundary logs the key
+and traceback, releases duplicate tracking, and continues processing other jobs.
+
+`asyncio.CancelledError` is likewise untouched. Cancellation during collection prevents
+persistence, while cancellation during persistence interrupts the awaited write according to the
+storage contract. Handler-directed cancellation during forced shutdown can therefore stop the job
+without being mislabeled as success.
+
+### Example scenarios
+
+- A CSFloat request for one exact item returns three normalized observations; all three are passed
+  as one batch to `save_quotes()`, and execution completes after the batch commits.
+- The provider successfully reports no matching observations; `save_quotes([])` completes as a
+  no-op and the job succeeds without inventing data.
+- Two producers submit the same marketplace/item request; the first is accepted and the second
+  receives `SubmissionResult.DUPLICATE` while the first remains queued or running.
+- Two jobs request different items; they have independent keys and may run concurrently, subject to
+  the handler and shared collection-service limits.
+- A provider or database operation fails; the original exception reaches the direct caller or the
+  handler's existing failure boundary.
+
+### Design decisions and limitations
+
+The job depends on the concrete service interfaces rather than introducing parallel repository or
+collector abstractions. It deliberately trusts `CollectionService` to return normalized quotes and
+`StorageService` to validate and atomically store its batch. This keeps the orchestration small and
+avoids duplicating retry, normalization, HTTP, or transaction behavior.
+
+Implemented functionality is limited to one marketplace and one exact `Item` per execution. Batch
+requests, extra marketplace query filters, result pricing, alerts, persistent schedules, and global
+retry policy are not implemented. Those are future concerns and must not be inferred from the
+current job.
+
+The focused tests are in
+[`tests/test_fetch_market_job.py`](../../tests/test_fetch_market_job.py). They cover identity,
+contract compatibility, arguments, successful and empty results, failure and cancellation
+propagation, concurrent independent work, handler duplicate prevention, scheduler compatibility,
+and forbidden dependency boundaries.
+
+Run them from `backend/`:
+
+```bash
+python3 -m pytest -q tests/test_fetch_market_job.py
+python3 -m pytest -q
+```
+
+## 3. Handler: bounded execution
 
 [`JobHandler`](handler.py#L20) owns one bounded `asyncio.Queue` and a fixed number of long-running
 worker tasks.
@@ -171,7 +295,7 @@ sequenceDiagram
 
 The package is designed for use from one asyncio event loop. `submit()` is not a cross-thread API.
 
-## 3. Scheduler: recurring submission
+## 4. Scheduler: recurring submission
 
 [`JobScheduler`](scheduler.py#L25) receives an existing handler. It stores recurring **definitions**,
 not reusable job instances. Each definition has:
