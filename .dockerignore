@@ -1,6 +1,16 @@
 .git
 .gitignore
 .venv
+**/.venv
+**/__pycache__
+**/*.py[cod]
+backend/.cache
+backend/.env
+secrets
+data
+frontend/node_modules
+frontend/dist
+*.log
 venv
 **/__pycache__
 **/*.py[cod]

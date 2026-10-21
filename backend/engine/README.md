@@ -8,12 +8,19 @@ The composition root is [`bootstrap.py`](bootstrap.py). It loads validated setti
 dependencies explicitly, registers enabled marketplaces, and returns an unstarted engine. There
 is no global engine instance or dependency-injection framework.
 
+The executable process boundary is [`__main__.py`](__main__.py), invoked with
+`python -m engine`. It loads settings and delegates signal-aware waiting and guaranteed cleanup to
+[`runtime.py`](runtime.py). Docker Compose runs this same entry point rather than maintaining a
+second lifecycle implementation.
+
 ## Architecture
 
 ```mermaid
 flowchart TD
+    Process[python -m engine] --> Runtime[run_market_engine]
     Settings[EngineSettings] --> Bootstrap[create_market_engine]
     Bootstrap --> Engine[MarketEngine]
+    Runtime --> Engine
     Engine -. lifecycle .-> Storage[(StorageService)]
     Engine -. lifecycle .-> Handler[JobHandler]
     Engine -. lifecycle .-> Scheduler[JobScheduler]
@@ -42,6 +49,8 @@ it does not duplicate their business methods.
 
 | Source | Responsibility |
 |---|---|
+| [`__main__.py`](__main__.py) | Executable settings loading, logging, and process exit status |
+| [`runtime.py`](runtime.py) | SIGINT/SIGTERM handling, process waiting, cancellation, and guaranteed engine stop |
 | [`market_engine.py`](market_engine.py) | Lifecycle state, ordered startup, rollback, graceful shutdown, and owned-resource cleanup |
 | [`bootstrap.py`](bootstrap.py) | Settings-driven construction, marketplace registration, and explicit dependency wiring |
 | [`engine.py`](engine.py) | Compatibility alias for the former empty `OracleEngine` placeholder |
@@ -57,6 +66,8 @@ it does not duplicate their business methods.
 | [`alerts/service.py`](alerts/service.py) | Durable edge-trigger evaluation for native lowest-ask observations |
 | [`notifications/service.py`](notifications/service.py) | Claimed, retried, and durably recorded Discord delivery |
 | [`../tests/test_market_engine.py`](../tests/test_market_engine.py) | Lifecycle and end-to-end integration coverage |
+| [`../tests/test_engine_runtime.py`](../tests/test_engine_runtime.py) | Standalone process shutdown and cancellation coverage |
+| [`../tests/test_engine_integration.py`](../tests/test_engine_integration.py) | Collection, pricing, restart, alert, and notification integration coverage |
 
 ## Dependency wiring
 
@@ -79,6 +90,16 @@ resources are transferred to the engine and closed at shutdown.
 `NotificationService` is constructed only when `CS2_DISCORD_WEBHOOK_URL` is configured. Without a
 webhook, alert events remain durable but no external delivery is attempted. A supplied notification
 HTTP client is also transferred to the engine and closed during shutdown.
+
+For a standalone process, run from `backend/`:
+
+```bash
+python -m engine
+```
+
+`run_market_engine()` installs `SIGINT` and `SIGTERM` handlers before startup, waits on an
+`asyncio.Event`, and calls `MarketEngine.stop()` from a `finally` block. Embedding applications can
+inject their own shutdown event and retain signal ownership.
 
 ## Startup sequence
 
@@ -215,6 +236,7 @@ From `backend/` with dependencies installed:
 
 ```bash
 .venv/bin/python -m pytest -q tests/test_market_engine.py
+.venv/bin/python -m pytest -q tests/test_engine_runtime.py tests/test_engine_integration.py
 .venv/bin/python -m pytest -q
 ```
 
@@ -223,6 +245,12 @@ It covers dependency order, registry composition, handler and scheduler activati
 watchlist restoration, fetch-and-persist, alert/event/delivery integration, recurring job failure
 isolation, partial-start cleanup, graceful active-work shutdown, cancellation, terminal/repeated
 lifecycle calls, owned-resource closure, and orphan-task checks. It performs no live API calls.
+The complete backend suite passes **374 tests** after process and final integration validation.
+
+Container deployment is defined by [`../Dockerfile`](../Dockerfile) and
+[`../../compose.yaml`](../../compose.yaml). The image runs `python -m engine` as an unprivileged
+user, while Compose mounts SQLite at `/data/engine.sqlite3` and allows signal-driven cleanup before
+container termination.
 The complete backend suite passes **378 tests** after API integration.
 
 ## Known limitations
@@ -233,6 +261,8 @@ The complete backend suite passes **378 tests** after API integration.
   `pending` by process termination.
 - There is no durable event-dispatch worker. An alert event committed immediately before a process
   or notification-integration failure remains queryable but is not automatically redelivered.
+- The standalone process is implemented, but the separate FastAPI application does not expose
+  engine state or management endpoints.
 - [`api/`](api/README.md) owns the FastAPI lifespan and starts/stops one engine per ASGI process.
 - SQLite tables are created with SQLAlchemy `create_all`; schema migration tooling is not yet part
   of this repository.
