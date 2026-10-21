@@ -264,7 +264,7 @@ Run the full backend suite from `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-After lifecycle integration, the full suite completed with **369 passing tests**. The tests
+After final integration, the full suite completed with **374 passing tests**. The tests
 require no Docker daemon, network calls, external database server, or real credentials.
 
 ## Extending the module

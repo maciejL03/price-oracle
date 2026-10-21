@@ -181,7 +181,7 @@ From `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-The alert module has **37 passing tests**. The complete backend suite has **369 passing tests**.
+The alert module has **37 passing tests**. The complete backend suite has **374 passing tests**.
 Tests use synthetic market data and temporary SQLite databases; they make no marketplace or
 notification calls and require no credentials. Coverage includes both conditions, equality,
 precision, all compatibility dimensions, invalid configuration, freshness, duplicate suppression,
