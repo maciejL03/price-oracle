@@ -43,6 +43,17 @@ Prices are stored as decimal text to avoid SQLite `REAL` conversion. Observation
 stored as fixed UTC text with microsecond precision. ORM mappings remain private to this
 package and are converted back to validated domain objects on every read.
 
+## Alert persistence
+
+`StorageService` also implements the persistence contract required by
+[`AlertService`](../alerts/README.md). It stores alert rules, per-rule active state, and append-only
+alert events. Rule-state updates use the observation timestamp as an ordering guard.
+
+`commit_alert_evaluation()` atomically claims an inactive-to-active transition and inserts its event.
+The event is returned only after commit, so concurrent evaluation cannot generate duplicate events
+for one transition and an insert failure cannot leave the rule incorrectly active. Rules and states
+can be deleted while historical events remain available through `list_alert_events()`.
+
 ## SQLite behavior
 
 File-backed databases use WAL mode for concurrent readers and SQLite's normal single-writer
@@ -51,7 +62,7 @@ retry loop. Contention that outlasts the timeout raises `StorageBusyError`; othe
 failures raise `StorageError`, preserving the original exception as their cause.
 
 There is no application-wide database lock, in-memory mirror, write queue, repository
-hierarchy, migration framework, or speculative schema for watchlists and alerts.
+hierarchy, migration framework, or speculative schema for watchlists.
 
 ## Testing
 
