@@ -14,6 +14,7 @@ from engine.jobs import (
     JobScheduler,
     SubmissionResult,
 )
+from engine.jobs.fetch_market import QuoteBatchHandler
 from engine.models import Item, MarketQuote, QuoteType
 from engine.services import CollectionService
 from engine.storage import StorageService
@@ -68,12 +69,14 @@ def make_job(
     item: Item = ITEM,
     collection: CollectionService | None = None,
     storage: StorageService | None = None,
+    after_persist: QuoteBatchHandler | None = None,
 ) -> FetchMarketJob:
     return FetchMarketJob(
         marketplace,
         item,
         collection or FakeCollectionService(),
         storage or FakeStorageService(),
+        after_persist=after_persist,
     )
 
 
@@ -116,6 +119,21 @@ async def test_execute_collects_requested_marketplace_and_item_then_persists() -
 
     assert collection.calls == [("example", ITEM)]
     assert storage.calls == [[QUOTE]]
+
+
+@pytest.mark.asyncio
+async def test_post_persistence_hook_receives_an_immutable_batch_in_order() -> None:
+    storage = FakeStorageService()
+    calls: list[str] = []
+
+    async def after_persist(quotes: tuple[MarketQuote, ...]) -> None:
+        assert storage.calls == [[QUOTE]]
+        assert quotes == (QUOTE,)
+        calls.append("processed")
+
+    await make_job(storage=storage, after_persist=after_persist).execute()
+
+    assert calls == ["processed"]
 
 
 @pytest.mark.asyncio

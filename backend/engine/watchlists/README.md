@@ -163,11 +163,10 @@ unchanged. A later scheduler failure leaves the newly saved configuration availa
 `JobScheduler.unregister()` deliberately does not cancel accepted work. The handler's stable-key
 deduplication also prevents a changed registration from overlapping an already active fetch.
 
-## Storage integration still required
+## Storage integration
 
-The existing [`StorageService`](../storage/service.py) currently persists quotes only. This module
-therefore depends on the `WatchlistStorage` protocol and uses fake persistence in its tests. A real
-integration must add these operations to the storage component in a separately approved change:
+[`StorageService`](../storage/service.py) implements the `WatchlistStorage` protocol with these
+operations:
 
 ```python
 async def list_watchlists() -> list[Watchlist]: ...
@@ -176,9 +175,10 @@ async def save_watchlist(watchlist: Watchlist) -> None: ...
 async def delete_watchlist(watchlist_id: UUID) -> bool: ...
 ```
 
-`save_watchlist()` must atomically create or replace the watchlist, its items, and its marketplace
-associations. `delete_watchlist()` must atomically remove the aggregate. Database errors should use
-the existing `StorageError` hierarchy.
+`save_watchlist()` atomically creates or replaces the watchlist, its items, and its marketplace
+associations. `delete_watchlist()` atomically removes the aggregate. Database errors use the
+existing `StorageError` hierarchy. [`MarketEngine`](../market_engine.py) calls `sync_jobs()` after
+storage and workers are ready and before starting the scheduler.
 
 `FetchMarketJob` is supplied through the `FetchJobFactory` dependency. Application composition can
 provide a lambda that constructs the concrete job with its shared `CollectionService` and
@@ -206,7 +206,7 @@ python -m pytest -q
 Latest implementation run:
 
 - Watchlist module: **24 passed**
-- Complete backend suite: **278 passed**
+- Complete backend suite: **369 passed**
 
 The suite uses fake storage, scheduler, jobs, and marketplaces. It also uses the real scheduler and
 handler for the active-fetch removal case. No live marketplace API is called.

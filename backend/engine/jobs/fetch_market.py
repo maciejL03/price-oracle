@@ -1,15 +1,23 @@
 """One-shot market collection and persistence job."""
 
+from __future__ import annotations
+
 import logging
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from engine.models import Item
+from engine.models import Item, MarketQuote
 from engine.services import CollectionService
-from engine.storage import StorageService
+
+if TYPE_CHECKING:
+    from engine.storage import StorageService
 
 from .base import EngineJob
 
 logger = logging.getLogger(__name__)
+
+QuoteBatchHandler = Callable[[tuple[MarketQuote, ...]], Awaitable[None]]
 
 
 class FetchMarketJob(EngineJob):
@@ -21,11 +29,14 @@ class FetchMarketJob(EngineJob):
         item: Item,
         collection_service: CollectionService,
         storage_service: StorageService,
+        *,
+        after_persist: QuoteBatchHandler | None = None,
     ) -> None:
         self._marketplace = marketplace
         self._item = item
         self._collection_service = collection_service
         self._storage_service = storage_service
+        self._after_persist = after_persist
         self._key = (
             f"fetch-market:{quote(marketplace, safe='')}:"
             f"{quote(item.market_hash_name, safe='')}"
@@ -51,3 +62,5 @@ class FetchMarketJob(EngineJob):
             self._marketplace,
             self._item.market_hash_name,
         )
+        if self._after_persist is not None:
+            await self._after_persist(tuple(quotes))

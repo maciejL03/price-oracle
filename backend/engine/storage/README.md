@@ -62,6 +62,13 @@ inserts one pending row per alert-event ID; a conflict reports that the event wa
 `get_notification_delivery()` returns its validated state, and
 `complete_notification_delivery()` changes a pending claim to a succeeded or failed outcome.
 
+## Watchlist persistence
+
+`StorageService` implements the `WatchlistStorage` contract used by `WatchlistService`. A watchlist
+root and its item/marketplace associations are created or replaced in one transaction. Empty
+watchlists are preserved, associations are deleted by foreign-key cascade, and startup can restore
+recurring jobs from the database after a process restart.
+
 The delivery row references the durable alert event and stores no webhook URL, token, provider
 response body, or raw network exception. This database boundary suppresses duplicate callers, but
 it cannot make an external Discord request and a SQLite transaction exactly once together.
@@ -73,8 +80,8 @@ behavior. A bounded busy timeout lets brief writer contention settle without an 
 retry loop. Contention that outlasts the timeout raises `StorageBusyError`; other persistence
 failures raise `StorageError`, preserving the original exception as their cause.
 
-There is no application-wide database lock, in-memory mirror, write queue, repository
-hierarchy, migration framework, or speculative schema for watchlists.
+There is no application-wide database lock, in-memory mirror, write queue, repository hierarchy,
+or migration framework.
 
 ## Testing
 

@@ -3,6 +3,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import aiosqlite
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from engine.errors import StorageBusyError, StorageError
 from engine.models import Item, MarketQuote, QuoteType
 from engine.storage import StorageService
+from engine.watchlists import Watchlist, WatchlistItem
 
 ITEM_NAME = "AK-47 | Redline (Field-Tested)"
 
@@ -72,6 +74,41 @@ async def test_quote_round_trip_preserves_every_domain_field(tmp_path: Path) -> 
     assert restored == [quote]
     assert restored[0].price.as_tuple() == quote.price.as_tuple()
     assert restored[0].observed_at == offset_time.astimezone(UTC)
+
+
+@pytest.mark.asyncio
+async def test_watchlist_aggregate_survives_replace_and_restart(tmp_path: Path) -> None:
+    database_path = tmp_path / "watchlists.sqlite3"
+    watchlist_id = uuid4()
+    original = Watchlist(
+        id=watchlist_id,
+        name="Targets",
+        interval_seconds=30,
+        items=(
+            WatchlistItem(
+                item=Item(market_hash_name=ITEM_NAME),
+                marketplaces={"csfloat", "skinport"},
+            ),
+        ),
+    )
+
+    async with StorageService(database_path) as storage:
+        await storage.save_watchlist(original)
+        assert await storage.get_watchlist(watchlist_id) == original
+
+        replacement = Watchlist(
+            id=watchlist_id,
+            name="Targets renamed",
+            interval_seconds=60,
+        )
+        await storage.save_watchlist(replacement)
+        assert await storage.list_watchlists() == [replacement]
+
+    async with StorageService(database_path) as storage:
+        assert await storage.get_watchlist(watchlist_id) == replacement
+        assert await storage.delete_watchlist(watchlist_id)
+        assert not await storage.delete_watchlist(watchlist_id)
+        assert await storage.list_watchlists() == []
 
 
 @pytest.mark.asyncio

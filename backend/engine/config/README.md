@@ -4,12 +4,12 @@
 
 The `engine.config` package loads and validates the small set of startup values used by the
 implemented engine infrastructure. [`EngineSettings`](settings.py) currently configures the
-`JobHandler` worker pool and shutdown behavior plus the SQLite storage path and busy timeout.
+`JobHandler` worker pool, SQLite storage, scheduler timing, quote freshness, CSFloat registration,
+and optional Discord notification delivery.
 
 The package owns configuration parsing and validation only. It does not start the application,
-create jobs, connect to a database, select marketplaces, or expose a global settings instance.
-Future application bootstrap code should construct one settings object and explicitly pass its
-values to the components it creates.
+create jobs, connect to a database, or expose a global settings instance. The engine composition
+root constructs one settings object and explicitly passes its values to the components it creates.
 
 ## Architecture
 
@@ -21,17 +21,18 @@ flowchart LR
     Secrets[Docker Secrets<br/>/run/secrets] --> Settings
     Defaults[Validated defaults] --> Settings
 
-    Settings -. future dependency injection .-> Bootstrap[Application bootstrap<br/>not implemented]
-    Bootstrap -.-> Handler[JobHandler]
-    Bootstrap -.-> Scheduler[JobScheduler]
-    Bootstrap -.-> Storage[StorageService]
+    Settings --> Bootstrap[create_market_engine]
+    Bootstrap --> Handler[JobHandler]
+    Bootstrap --> Scheduler[JobScheduler]
+    Bootstrap --> Storage[StorageService]
+    Bootstrap --> Marketplaces[MarketplaceRegistry]
+    Bootstrap --> Services[Pricing, alerts,<br/>notifications]
 
     style Settings fill:#eef6ff,stroke:#3178c6
     style Bootstrap stroke-dasharray: 5 5
 ```
 
-The dashed edges describe the intended integration boundary. This module does not implement
-application bootstrap.
+[`../bootstrap.py`](../bootstrap.py) is the implemented integration boundary.
 
 ## File structure
 
@@ -75,6 +76,13 @@ settings = EngineSettings()
 | `job_shutdown_timeout_seconds` | `float` | `10.0` | Maximum graceful-drain time before handler cancellation |
 | `database_path` | `Path` | `data/engine.sqlite3` | File used for durable engine storage |
 | `database_busy_timeout_seconds` | `float` | `5.0` | Bounded wait for SQLite lock contention |
+| `scheduler_poll_seconds` | `float` | `0.1` | Scheduler due-work polling interval |
+| `quote_max_age_seconds` | `float` | `300.0` | Shared pricing and alert freshness window |
+| `csfloat_enabled` | `bool` | `true` | Register the concrete CSFloat marketplace |
+| `csfloat_currency` | `str` | `GBP` | Uppercase ISO currency used to normalize CSFloat prices |
+| `csfloat_api_key` | `SecretStr \| None` | `None` | Optional CSFloat credential |
+| `csfloat_timeout_seconds` | `float` | `10.0` | Per-request CSFloat timeout |
+| `discord_webhook_url` | `SecretStr \| None` | `None` | Optional Discord notification destination |
 
 Numeric fields must be greater than zero. Invalid explicit values or values from an external
 source raise Pydantic's `ValidationError`; they are never replaced with a default.
@@ -144,10 +152,8 @@ with file content `8` sets `worker_count` to `8`. A file named `WORKER_COUNT` is
 exact mapping is tested in
 [`test_docker_secret_filenames_include_environment_prefix`](../../tests/test_configuration_sources.py#L106).
 
-The current model does not own marketplace credentials. `CSFloatMarketplace` accepts an optional
-API key directly from its caller, so a future bootstrap layer must decide whether that credential
-belongs in `EngineSettings` or in a separate secret boundary. Any credential added here must use a
-protected Pydantic type and receive masking tests.
+CSFloat API keys and Discord webhook URLs use `SecretStr`. Bootstrap unwraps them only at the
+specific adapter boundary, and application logs must never serialize their raw values.
 
 ## Design decisions
 
@@ -238,10 +244,8 @@ constraint. Construction stops; Pydantic does not fall back to `5`.
 
 ### Configure a marketplace credential through this model
 
-No credential is currently represented by `EngineSettings`. If bootstrap configuration takes
-ownership of the optional CSFloat API key, add a specifically named `SecretStr` field rather than a
-generic API key, pass it explicitly to the adapter, and add tests proving that environment and
-prefixed secret-file input work without exposing the value in `repr()` or serialization.
+Set `CS2_CSFLOAT_API_KEY` through the environment, dotenv, or a prefixed Docker Secret. The value
+remains a `SecretStr` until bootstrap passes it to `CSFloatMarketplace`.
 
 ## Testing
 
@@ -260,7 +264,7 @@ Run the full backend suite from `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-After integration, the full suite completed with **254 passing tests**. The tests
+After lifecycle integration, the full suite completed with **369 passing tests**. The tests
 require no Docker daemon, network calls, external database server, or real credentials.
 
 ## Extending the module

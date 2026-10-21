@@ -101,6 +101,7 @@ sequenceDiagram
     participant C as CollectionService
     participant M as Marketplace
     participant S as StorageService
+    participant P as Post-persistence hook
 
     H->>J: await execute()
     J->>C: await collect(marketplace, item)
@@ -109,6 +110,9 @@ sequenceDiagram
     C-->>J: normalized observations
     J->>S: await save_quotes(quotes)
     S-->>J: persistence complete
+    opt hook configured
+        J->>P: await hook(tuple(quotes))
+    end
     J-->>H: return
 ```
 
@@ -124,6 +128,7 @@ job = FetchMarketJob(
     item,
     collection_service,
     storage_service,
+    after_persist=optional_quote_batch_handler,
 )
 
 job.key                 # stable str identity
@@ -140,7 +145,10 @@ across concurrent jobs.
 `execute()` calls `CollectionService.collect(marketplace, item)` exactly once. It passes the
 returned `list[MarketQuote]` unchanged to `StorageService.save_quotes()` and awaits the write before
 returning. An empty successful result is still passed to storage; the existing storage contract
-treats it as a no-op, and the job does not fabricate an observation.
+treats it as a no-op, and the job does not fabricate an observation. When supplied, the optional
+`after_persist` callback receives an immutable tuple only after the storage commit succeeds.
+Bootstrap uses this hook for alert evaluation and optional notification delivery without coupling
+the job to either concrete service.
 
 ### Identity and lifecycle
 
@@ -163,10 +171,11 @@ by registering that same key with a factory that creates a fresh `FetchMarketJob
 
 ### Errors and cancellation
 
-The job does not catch collection, provider, validation, or storage exceptions. A collection
-failure prevents the storage call; a storage failure prevents successful completion. Direct callers
-receive the original exception. When run by `JobHandler`, its existing worker boundary logs the key
-and traceback, releases duplicate tracking, and continues processing other jobs.
+The job does not catch collection, provider, validation, storage, or hook exceptions. A collection
+failure prevents storage, a storage failure prevents the hook, and a hook failure marks the job
+failed after quotes have committed. Direct callers receive the original exception. When run by
+`JobHandler`, its existing worker boundary logs the key and traceback, releases duplicate tracking,
+and continues processing other jobs.
 
 `asyncio.CancelledError` is likewise untouched. Cancellation during collection prevents
 persistence, while cancellation during persistence interrupts the awaited write according to the
@@ -194,9 +203,9 @@ collector abstractions. It deliberately trusts `CollectionService` to return nor
 avoids duplicating retry, normalization, HTTP, or transaction behavior.
 
 Implemented functionality is limited to one marketplace and one exact `Item` per execution. Batch
-requests, extra marketplace query filters, result pricing, alerts, persistent schedules, and global
-retry policy are not implemented. Those are future concerns and must not be inferred from the
-current job.
+requests, extra marketplace query filters, and a global retry policy are not implemented. Pricing
+remains an independent service; alert and notification orchestration is injected through the
+generic post-persistence hook rather than implemented in this job.
 
 The focused tests are in
 [`tests/test_fetch_market_job.py`](../../tests/test_fetch_market_job.py). They cover identity,

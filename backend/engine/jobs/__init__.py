@@ -1,5 +1,5 @@
 from .base import EngineJob
-from .fetch_market import FetchMarketJob
+from .fetch_market import FetchMarketJob, QuoteBatchHandler
 from .handler import JobHandler, SubmissionResult
 from .scheduler import JobScheduler
 
@@ -8,5 +8,6 @@ __all__ = [
     "FetchMarketJob",
     "JobHandler",
     "JobScheduler",
+    "QuoteBatchHandler",
     "SubmissionResult",
 ]
