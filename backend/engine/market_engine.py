@@ -8,11 +8,12 @@ from collections.abc import Awaitable, Callable, Iterable
 from enum import Enum
 
 from engine.alerts import AlertService
+from engine.catalog import ItemCatalog
 from engine.errors import EngineError
 from engine.jobs import JobHandler, JobScheduler
 from engine.marketplaces import MarketplaceRegistry
 from engine.notifications import NotificationService
-from engine.services import CollectionService, PricingService
+from engine.services import CollectionService, MarketplaceComparisonService, PricingService
 from engine.storage import StorageService
 from engine.watchlists import WatchlistService
 
@@ -73,6 +74,8 @@ class MarketEngine:
         alerts: AlertService,
         notifications: NotificationService | None,
         owned_resource_closers: Iterable[AsyncCloser] = (),
+        catalog: ItemCatalog | None = None,
+        comparisons: MarketplaceComparisonService | None = None,
     ) -> None:
         self.storage = storage
         self.registry = registry
@@ -83,6 +86,8 @@ class MarketEngine:
         self.pricing = pricing
         self.alerts = alerts
         self.notifications = notifications
+        self.catalog = catalog
+        self.comparisons = comparisons
 
         self._owned_resource_closers = tuple(owned_resource_closers)
         self._lifecycle_lock = asyncio.Lock()

@@ -1,13 +1,13 @@
 # Marketplace system
 
-The marketplace package defines the shared provider contract and registry, and contains the
-implemented CSFloat adapter. Providers fetch external data and normalize it into the shared
+The marketplace package defines the shared provider contract and registry, and contains concrete
+CSFloat, Steam, and Skinport adapters. Providers fetch external data and normalize it into the shared
 [`MarketQuote`](../models/quote.py) model. Scheduling, retries, persistence, currency conversion,
 and pricing decisions remain outside this package.
 
-CSFloat is currently the only concrete adapter. Steam support is out of scope for this phase
-because the useful Community Market price endpoint is not part of Valve's supported Steamworks Web
-API.
+CSFloat provides individual listings. Steam and Skinport provide aggregate lowest-ask snapshots for
+the retained website comparison contract; their extra aggregate fields are kept in their provider
+snapshot types rather than added to the generic `MarketQuote` model.
 
 ## Architecture
 
@@ -15,11 +15,11 @@ API.
 flowchart LR
     Caller[CollectionService or caller] --> Registry[MarketplaceRegistry]
     Registry --> Contract[Marketplace protocol]
-    Contract --> CSFloat[CSFloatMarketplace]
-    CSFloat --> Client[reused httpx.AsyncClient]
-    Client --> API[CSFloat listings API]
-    API --> CSFloat
-    CSFloat --> Validate[validate identity and listing fields]
+    Contract --> Providers[CSFloat / Steam / Skinport]
+    Providers --> Client[reused httpx.AsyncClient]
+    Client --> API[Marketplace APIs]
+    API --> Providers
+    Providers --> Validate[validate identity and listing fields]
     Validate --> Normalize[normalize to MarketQuote]
     Normalize --> Caller
 ```
@@ -34,6 +34,8 @@ The registry accepts any object that structurally implements the runtime-checkab
 | [`base.py`](base.py) | Runtime-checkable provider protocol |
 | [`registry.py`](registry.py) | Explicit provider registration and lookup |
 | [`csfloat.py`](csfloat.py) | CSFloat HTTP requests, validation, and normalization |
+| [`steam.py`](steam.py) | Steam aggregate lowest-ask snapshot normalization |
+| [`skinport.py`](skinport.py) | Cached Skinport aggregate snapshot normalization |
 | [`__init__.py`](__init__.py) | Public package exports |
 | [`../errors.py`](../errors.py) | Provider-neutral exception hierarchy |
 | [`test_marketplace.py`](../../tests/test_marketplace.py) | Structural protocol tests |
@@ -41,6 +43,7 @@ The registry accepts any object that structurally implements the runtime-checkab
 | [`test_marketplace_registry_foundation.py`](../../tests/test_marketplace_registry_foundation.py) | Registry contract and validation tests |
 | [`test_marketplace_integration.py`](../../tests/test_marketplace_integration.py) | Multiple-provider domain integration tests |
 | [`test_csfloat_marketplace.py`](../../tests/test_csfloat_marketplace.py) | Mocked CSFloat HTTP tests |
+| [`test_compatibility_marketplaces.py`](../../tests/test_compatibility_marketplaces.py) | Mocked catalog, Steam, and Skinport tests |
 
 ## Public API
 
@@ -174,10 +177,11 @@ Do not add scheduling, persistence, currency conversion, or pricing comparisons 
 
 ## Current limitations
 
-- There is no Steam adapter.
 - CSFloat returns at most the first 50 matching listings; cursor traversal is intentionally not
   hidden inside one unbounded `fetch()` call.
 - `MarketQuote` does not retain CSFloat listing creation time, float value, paint seed, stickers,
   or pagination cursor.
 - Currency remains explicit configuration because the response has no ISO currency field.
 - The CSFloat integration is validated with mocked responses and makes no live-operability claim.
+- Steam and Skinport compatibility providers are also validated only with mocked responses; they
+  require production smoke testing and are not a substitute for official provider support.

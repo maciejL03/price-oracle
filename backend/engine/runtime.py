@@ -1,79 +1,121 @@
-"""Operating-system process lifecycle for the composed market engine."""
+"""Process entrypoint for running the self-hosted market engine."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import signal
-from collections.abc import Iterable
+from collections.abc import Callable
 
+from engine.bootstrap import create_market_engine
 from engine.market_engine import MarketEngine
 
 logger = logging.getLogger(__name__)
 
-_SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+
+EngineFactory = Callable[[], MarketEngine]
 
 
-async def run_market_engine(
-    engine: MarketEngine,
-    *,
-    shutdown_event: asyncio.Event | None = None,
-    handle_signals: bool = True,
-) -> None:
-    """Run an engine until shutdown is requested, then release its resources.
-
-    Production callers normally leave signal handling enabled. Tests and other
-    embedding applications can supply an event and retain signal ownership.
-    Cancellation follows the same cleanup path as an operating-system signal.
-    """
-    if not isinstance(engine, MarketEngine):
-        raise TypeError("engine must be a MarketEngine")
-    if shutdown_event is not None and not isinstance(shutdown_event, asyncio.Event):
-        raise TypeError("shutdown_event must be an asyncio.Event")
-
-    stop_requested = shutdown_event or asyncio.Event()
-    loop = asyncio.get_running_loop()
-    registered_signals = (
-        _install_signal_handlers(loop, stop_requested, _SHUTDOWN_SIGNALS)
-        if handle_signals
-        else ()
+def configure_logging() -> None:
+    """Configure concise process logging when no application handler exists."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-
-    try:
-        await engine.start()
-        logger.info("Price Oracle engine process is ready")
-        await stop_requested.wait()
-        logger.info("Price Oracle engine process received a shutdown request")
-    finally:
-        _remove_signal_handlers(loop, registered_signals)
-        await engine.stop()
 
 
 def _install_signal_handlers(
-    loop: asyncio.AbstractEventLoop,
-    shutdown_event: asyncio.Event,
-    signals: Iterable[signal.Signals],
+    loop: asyncio.AbstractEventLoop, shutdown_requested: asyncio.Event
 ) -> tuple[signal.Signals, ...]:
-    registered: list[signal.Signals] = []
-    for process_signal in signals:
+    """Request a clean shutdown on process termination signals."""
+    installed: list[signal.Signals] = []
+
+    for received_signal in (signal.SIGINT, signal.SIGTERM):
         try:
-            loop.add_signal_handler(process_signal, shutdown_event.set)
+            loop.add_signal_handler(
+                received_signal,
+                _request_shutdown,
+                shutdown_requested,
+                received_signal,
+            )
         except (NotImplementedError, RuntimeError):
             logger.warning(
-                "Event loop does not support %s handlers; cancellation remains available",
-                process_signal.name,
+                "Signal handlers are unavailable; use task cancellation to stop the engine"
             )
-            continue
-        registered.append(process_signal)
-    return tuple(registered)
+            break
+        installed.append(received_signal)
+
+    return tuple(installed)
 
 
 def _remove_signal_handlers(
-    loop: asyncio.AbstractEventLoop,
-    signals: Iterable[signal.Signals],
+    loop: asyncio.AbstractEventLoop, installed: tuple[signal.Signals, ...]
 ) -> None:
-    for process_signal in signals:
-        loop.remove_signal_handler(process_signal)
+    for received_signal in installed:
+        loop.remove_signal_handler(received_signal)
 
 
-__all__ = ["run_market_engine"]
+def _request_shutdown(
+    shutdown_requested: asyncio.Event, received_signal: signal.Signals
+) -> None:
+    if shutdown_requested.is_set():
+        logger.warning(
+            "Received %s again; graceful shutdown is already in progress",
+            received_signal.name,
+        )
+        return
+    logger.info("Received %s; starting graceful shutdown", received_signal.name)
+    shutdown_requested.set()
+
+
+async def run(
+    factory: EngineFactory = create_market_engine,
+    *,
+    shutdown_requested: asyncio.Event | None = None,
+) -> int:
+    """Start one engine, wait for shutdown, and release every owned resource."""
+    try:
+        engine = factory()
+        await engine.start()
+    except asyncio.CancelledError:
+        logger.info("Engine startup was cancelled")
+        raise
+    except Exception:
+        logger.exception("Engine startup failed")
+        return EXIT_FAILURE
+
+    event = shutdown_requested or asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed = _install_signal_handlers(loop, event)
+    shutdown_failed = False
+    try:
+        logger.info("Market engine is running")
+        await event.wait()
+    except asyncio.CancelledError:
+        logger.info("Engine task cancelled; starting graceful shutdown")
+        raise
+    finally:
+        _remove_signal_handlers(loop, installed)
+        try:
+            await engine.stop()
+        except Exception:
+            shutdown_failed = True
+            logger.exception("Engine shutdown failed")
+
+    return EXIT_FAILURE if shutdown_failed else EXIT_SUCCESS
+
+
+def main() -> int:
+    """Run the engine process and translate an interrupted task into an exit code."""
+    configure_logging()
+    try:
+        return asyncio.run(run())
+    except KeyboardInterrupt:
+        logger.info("Engine process interrupted")
+        return EXIT_SUCCESS
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through ``main``.
+    raise SystemExit(main())

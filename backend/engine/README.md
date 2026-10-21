@@ -83,9 +83,9 @@ async with engine:
 ```
 
 `create_market_engine()` performs no database I/O and starts no tasks. By default it constructs
-CSFloat only when `CS2_CSFLOAT_ENABLED` is true. Tests and self-hosted extensions can inject an
-iterable of marketplace implementations; marketplace resources passed to bootstrap are transferred
-to the engine and closed at shutdown.
+the catalog plus Steam, Skinport, and optionally CSFloat (`CS2_CSFLOAT_ENABLED`). Tests and
+self-hosted extensions can inject an iterable of marketplace implementations; injected marketplace
+resources are transferred to the engine and closed at shutdown.
 
 `NotificationService` is constructed only when `CS2_DISCORD_WEBHOOK_URL` is configured. Without a
 webhook, alert events remain durable but no external delivery is attempted. A supplied notification
@@ -251,6 +251,7 @@ Container deployment is defined by [`../Dockerfile`](../Dockerfile) and
 [`../../compose.yaml`](../../compose.yaml). The image runs `python -m engine` as an unprivileged
 user, while Compose mounts SQLite at `/data/engine.sqlite3` and allows signal-driven cleanup before
 container termination.
+The complete backend suite passes **378 tests** after API integration.
 
 ## Known limitations
 
@@ -262,6 +263,8 @@ container termination.
   or notification-integration failure remains queryable but is not automatically redelivered.
 - The standalone process is implemented, but the separate FastAPI application does not expose
   engine state or management endpoints.
+- [`api/`](api/README.md) owns the FastAPI lifespan and starts/stops one engine per ASGI process.
 - SQLite tables are created with SQLAlchemy `create_all`; schema migration tooling is not yet part
   of this repository.
-- Marketplace enablement currently covers the one concrete engine marketplace, CSFloat.
+- Steam and Skinport are aggregate lowest-ask providers for the compatibility comparison API;
+  live provider behavior still requires deployment smoke testing.

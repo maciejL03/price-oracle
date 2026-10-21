@@ -61,6 +61,7 @@ V1 does not perform currency conversion, fee/profit calculations, trading, forec
 management, or multi-user authorization. It has no engine management HTTP API or CLI, no durable
 event-dispatch worker, no pending-notification recovery lease, and no database migration framework.
 The React interface displays the separate live Steam/Skinport comparator rather than engine state.
+A self-hosted Counter-Strike 2 marketplace monitoring engine with a React price-comparison UI.
 
 ## Architecture
 
@@ -260,6 +261,21 @@ instances are intentionally single-use; construct a fresh instance after shutdow
 | [`app/main.py`](backend/app/main.py) | FastAPI `app` | Separate legacy comparison API | Legacy adapters/services |
 | [`frontend/src/App.tsx`](frontend/src/App.tsx) | React `App` | Separate Steam/Skinport comparison UI | FastAPI comparator endpoints |
 | [`compose.yaml`](compose.yaml) | `price-oracle-engine` service | Container lifecycle and persistent volume | [`backend/Dockerfile`](backend/Dockerfile) |
+frontend/              React UI (unchanged)
+    └── api/           HTTP client only
+
+backend/
+    ├── engine/        Engine services, storage, marketplaces, jobs, and API
+    │   └── api/       FastAPI routes and HTTP schemas
+    └── app/main.py    Compatibility ASGI entry point
+```
+
+| Layer | Responsibility |
+|-------|----------------|
+| **engine** | Collection, pricing, storage, watchlists, alerts, notifications, and lifecycle |
+| **engine/catalog** | Canonical item metadata and deterministic search |
+| **engine/marketplaces** | CSFloat, Steam, and Skinport provider normalization |
+| **engine/api** | Thin FastAPI transport and website-contract adapters |
 
 ## Module documentation
 
@@ -630,6 +646,19 @@ be extended consistently; do not make `AlertService` depend on transport details
   of the Compose service.
 - Marketplace integrations are validated against mocked responses, not live-provider contract
   tests.
+Engine settings live in `backend/engine/config/settings.py` and use the `CS2_` environment prefix:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CS2_STEAM_COUNTRY` | `GB` | Steam market region |
+| `CS2_STEAM_CURRENCY` | `GBP` | Steam market currency |
+| `CS2_SKINPORT_CURRENCY` | `GBP` | Skinport currency |
+| `CS2_CACHE_DIR` | `.cache` | Catalog and marketplace cache directory |
+| `CS2_CATALOG_CACHE_TTL_SECONDS` | `86400` | ByMykel cache TTL |
+| `CS2_SKINPORT_CACHE_TTL_SECONDS` | `300` | Skinport cache TTL |
+
+See the [engine API README](backend/engine/api/README.md) for lifecycle ownership, full routes,
+contracts, engine integration, and migration status.
 
 ## License
 

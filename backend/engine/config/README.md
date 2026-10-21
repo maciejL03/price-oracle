@@ -4,8 +4,8 @@
 
 The `engine.config` package loads and validates the small set of startup values used by the
 implemented engine infrastructure. [`EngineSettings`](settings.py) currently configures the
-`JobHandler` worker pool, SQLite storage, scheduler timing, quote freshness, CSFloat registration,
-and optional Discord notification delivery.
+`JobHandler` worker pool, SQLite storage, scheduler timing, quote freshness, marketplace/catalog
+configuration, CORS, and optional Discord notification delivery.
 
 The package owns configuration parsing and validation only. It does not start the application,
 create jobs, connect to a database, or expose a global settings instance. The engine composition
@@ -75,6 +75,7 @@ settings = EngineSettings()
 | `job_queue_capacity` | `int` | `100` | Maximum number of jobs waiting for a worker |
 | `job_shutdown_timeout_seconds` | `float` | `10.0` | Maximum graceful-drain time before handler cancellation |
 | `database_path` | `Path` | `data/engine.sqlite3` | File used for durable engine storage |
+| `cache_dir` | `Path` | `.cache` | Catalog and Skinport cache directory |
 | `database_busy_timeout_seconds` | `float` | `5.0` | Bounded wait for SQLite lock contention |
 | `scheduler_poll_seconds` | `float` | `0.1` | Scheduler due-work polling interval |
 | `quote_max_age_seconds` | `float` | `300.0` | Shared pricing and alert freshness window |
@@ -83,6 +84,11 @@ settings = EngineSettings()
 | `csfloat_api_key` | `SecretStr \| None` | `None` | Optional CSFloat credential |
 | `csfloat_timeout_seconds` | `float` | `10.0` | Per-request CSFloat timeout |
 | `discord_webhook_url` | `SecretStr \| None` | `None` | Optional Discord notification destination |
+| `catalog_*` | URL / `float` | public ByMykel URL / `86400` | Catalog source and cache TTL |
+| `steam_*` | country/currency/app fields | GB / GBP / 730 | Steam compatibility provider configuration |
+| `skinport_*` | currency/URL/TTL | GBP / API URL / `300` | Skinport compatibility provider configuration |
+| `http_timeout_seconds` | `float` | `30` | Shared catalog, Steam, and Skinport request timeout |
+| `cors_origins` | `list[str]` | local Vite origins | FastAPI CORS allow-list |
 
 Numeric fields must be greater than zero. Invalid explicit values or values from an external
 source raise Pydantic's `ValidationError`; they are never replaced with a default.
