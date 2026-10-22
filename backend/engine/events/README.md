@@ -8,7 +8,7 @@ publisher a direct dependency on every consumer. It is not a replacement for `St
 
 ```mermaid
 flowchart LR
-    P[Engine component] -->|await publish(event)| B[EventBus]
+    P[Engine component] -->|await publish| B[EventBus]
     B --> A[Async subscriber A]
     B --> C[Async subscriber B]
     B --> D[Async subscriber C]
@@ -115,9 +115,11 @@ The isolated tests cover registration, duplicate prevention, removal, typed disp
 ordering, concurrent and nested publishing, handler snapshots, exceptions, cancellation, independent
 instances, and the absence of EventBus background tasks.
 
-Results for this change: `tests/test_event_bus.py` passed **14 tests**. The complete backend suite
-passed **383 tests**. Both commands completed on 2026-10-21 using Python 3.12 and the dependencies
-declared in `requirements.txt`.
+The focused EventBus tests and the complete **406-test** backend suite passed on 2026-10-22 using
+Python 3.12 and the dependencies declared in `requirements.txt`.
+
+No production service currently owns an `EventBus` or publishes `MarketQuoteStored`; the examples
+and integration points below are explicit extension guidance, not claims of active event flow.
 
 ## Safe future integration points
 

@@ -172,9 +172,9 @@ From `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-The notification module has **21 passing tests**. The complete backend suite has **374 passing
-tests**. Tests use `httpx.MockTransport`, fake storage, and temporary SQLite databases; they make no
-real network requests and require no credentials.
+The complete backend suite has **406 passing tests**. Notification coverage uses
+`httpx.MockTransport`, fake storage, and temporary SQLite databases; it makes no
+real network requests and requires no credentials.
 
 Coverage includes confirmed success, destination validation, missing credentials, network failure,
 timeouts, HTTP 429 delays, non-retryable errors, retry exhaustion, durable success/failure state,

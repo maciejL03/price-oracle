@@ -4,7 +4,7 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from engine.catalog import ByMykelItemCatalog
+from engine.catalog import ByMykelItemCatalog, CatalogUnavailableError
 from engine.marketplaces import SkinportMarketplace, SteamMarketplace
 from engine.models import Item, QuoteType
 
@@ -45,6 +45,52 @@ async def test_catalog_preserves_exact_prefix_then_contains_search_order(tmp_pat
         ITEM.market_hash_name,
         "StatTrak™ AK-47 | Redline",
     ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_refetches_when_a_fresh_cache_is_corrupt(tmp_path) -> None:
+    cache_path = tmp_path / "catalog.json"
+    cache_path.write_text("{truncated", encoding="utf-8")
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "item": {
+                    "market_hash_name": ITEM.market_hash_name,
+                    "name": "AK-47 | Redline",
+                }
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        catalog = ByMykelItemCatalog(
+            url="https://catalog.example/items",
+            cache_path=cache_path,
+            cache_ttl_seconds=3600,
+            timeout_seconds=1,
+            client=client,
+        )
+        result = await catalog.search("redline", limit=20)
+
+    assert [item.market_hash_name for item in result] == [ITEM.market_hash_name]
+
+
+@pytest.mark.asyncio
+async def test_catalog_normalizes_remote_http_failures(tmp_path) -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        catalog = ByMykelItemCatalog(
+            url="https://catalog.example/items",
+            cache_path=tmp_path / "catalog.json",
+            cache_ttl_seconds=3600,
+            timeout_seconds=1,
+            client=client,
+        )
+        with pytest.raises(CatalogUnavailableError, match="HTTP 503"):
+            await catalog.search("redline", limit=20)
 
 
 @pytest.mark.asyncio
@@ -127,3 +173,30 @@ async def test_skinport_provider_preserves_snapshot_statistics(tmp_path) -> None
     assert snapshot.mean_price == Decimal("23.5")
     assert snapshot.quantity == 7
     assert snapshot.item_page == "https://skinport.example/item"
+
+
+@pytest.mark.asyncio
+async def test_skinport_refetches_when_a_fresh_cache_is_corrupt(tmp_path) -> None:
+    cache_path = tmp_path / "skinport.json"
+    cache_path.write_text("[truncated", encoding="utf-8")
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=[{"market_hash_name": ITEM.market_hash_name, "min_price": 22.39}],
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        marketplace = SkinportMarketplace(
+            currency="GBP",
+            app_id=730,
+            base_url="https://skinport.example/v1",
+            cache_path=cache_path,
+            cache_ttl_seconds=3600,
+            timeout_seconds=1,
+            client=client,
+        )
+        snapshot = await marketplace.fetch_snapshot(ITEM)
+
+    assert snapshot is not None
+    assert snapshot.quote.price == Decimal("22.39")

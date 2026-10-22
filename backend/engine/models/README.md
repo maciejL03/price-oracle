@@ -59,13 +59,13 @@ that matter when matching normal listings:
 
 ```mermaid
 flowchart TD
-    Base[AK-47 | Redline] --> FT[AK-47 | Redline<br/>Field-Tested]
-    Base --> MW[AK-47 | Redline<br/>Minimal Wear]
+    Base["AK-47 | Redline"] --> FT["AK-47 | Redline<br/>Field-Tested"]
+    Base --> MW["AK-47 | Redline<br/>Minimal Wear"]
     FT --> Normal[Normal]
     FT --> ST[StatTrak]
 
-    Normal -->|different identifier| NID[AK-47 | Redline<br/>Field-Tested]
-    ST -->|different identifier| SID[StatTrak AK-47 | Redline<br/>Field-Tested]
+    Normal -->|different identifier| NID["AK-47 | Redline<br/>Field-Tested"]
+    ST -->|different identifier| SID["StatTrak AK-47 | Redline<br/>Field-Tested"]
 ```
 
 The real strings include punctuation such as parentheses and the `™` symbol; the diagram shortens

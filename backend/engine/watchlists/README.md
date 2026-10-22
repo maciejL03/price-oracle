@@ -203,10 +203,6 @@ python -m pytest -q tests/test_watchlist_service.py
 python -m pytest -q
 ```
 
-Latest implementation run:
-
-- Watchlist module: **24 passed**
-- Complete backend suite: **374 passed**
-
-The suite uses fake storage, scheduler, jobs, and marketplaces. It also uses the real scheduler and
+The complete backend suite passes **406 tests**. Watchlist coverage uses fake storage, scheduler,
+jobs, and marketplaces. It also uses the real scheduler and
 handler for the active-fetch removal case. No live marketplace API is called.

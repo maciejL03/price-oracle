@@ -1,202 +1,171 @@
 # Docker deployment
 
-## Purpose
+## Scope
 
-This module runs the existing self-hosted `MarketEngine` as one Docker Compose
-service. It starts the scheduler, marketplace integrations, watchlists, alerts,
-notifications, and SQLite storage. It adds no API, dashboard, or second engine.
+[`compose.yaml`](../../compose.yaml) runs one engine-only service named
+`price-oracle-engine`. It restores watchlists, schedules collection, stores quotes in SQLite,
+evaluates alerts, and optionally delivers Discord notifications. It does not expose FastAPI or
+serve the React frontend.
 
-[`backend/app`](../../backend/app) is a separate FastAPI comparison application
-and is intentionally not run by this engine-only deployment.
+Do not run this daemon and `uvicorn app.main:app` against the same database: both processes would
+restore persisted watchlists into independent schedulers. The supported deployment has one engine
+owner and one SQLite writer process.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    Compose[Docker Compose] --> Engine[engine: engine.runtime]
-    Env[CS2_* environment] --> Settings[EngineSettings]
-    Secrets[/run/secrets/CS2_*] --> Settings
-    Settings --> Engine
-    Engine --> Jobs[JobHandler and JobScheduler]
-    Engine --> Markets[CSFloat marketplace]
-    Engine --> Services[Collection, watchlists, alerts, notifications]
+    Compose[Docker Compose] --> Container[price-oracle-engine]
+    Container --> Main[python -m engine]
+    Main --> Settings[EngineSettings]
+    Env["backend/.env and CS2_*"] --> Settings
+    Secrets["/run/secrets/CS2_*"] --> Settings
+    Settings --> Engine[MarketEngine]
+    Engine --> Jobs[JobHandler + JobScheduler]
+    Engine --> Providers[CSFloat / Steam / Skinport]
     Engine --> Storage[StorageService]
-    Storage --> SQLite[(engine-data volume: SQLite and WAL)]
-    Markets --> CSFloat[CSFloat API]
-    Services --> Discord[Discord webhook, optional]
+    Engine --> Alerts[Alerts + optional Discord]
+    Storage --> SQLite[(price-oracle-data:/data)]
 ```
 
-The entrypoint is [`runtime.py`](../../backend/engine/runtime.py), which uses
-[`create_market_engine`](../../backend/engine/bootstrap.py). Lifecycle ordering,
-rollback, and resource closure remain owned by
-[`MarketEngine`](../../backend/engine/market_engine.py).
-
-## Files
+## Active deployment files
 
 | File | Responsibility |
 |---|---|
-| [`Dockerfile`](../../Dockerfile) | Python 3.12 image and non-root engine process. |
-| [`compose.yaml`](../../compose.yaml) | One service, configuration, graceful stop, named volume. |
-| [`compose.secrets.yaml.example`](../../compose.secrets.yaml.example) | Optional Docker Secrets override. |
-| [`requirements-runtime.txt`](../../backend/requirements-runtime.txt) | Engine dependencies without tests or HTTP server. |
-| [`runtime.py`](../../backend/engine/runtime.py) | Signal-aware process runner. |
-| [`settings.py`](../../backend/engine/config/settings.py) | Validated configuration and Docker Secrets source. |
-| [`service.py`](../../backend/engine/storage/service.py) | SQLite initialization and WAL mode. |
+| [`compose.yaml`](../../compose.yaml) | Single service, optional env file, stop policy, persistent volume |
+| [`backend/Dockerfile`](../../backend/Dockerfile) | Python 3.12 non-root engine image |
+| [`backend/requirements-engine.txt`](../../backend/requirements-engine.txt) | Engine-only dependencies, including Brotli for Skinport |
+| [`compose.secrets.yaml.example`](../../compose.secrets.yaml.example) | Optional secret-file override |
+| [`backend/engine/__main__.py`](../../backend/engine/__main__.py) | Container process entry point |
+| [`backend/engine/runtime.py`](../../backend/engine/runtime.py) | Signals and guaranteed cleanup |
+
+The root `Dockerfile` and `backend/requirements-runtime.txt` belong to an earlier daemon packaging
+variant and are not referenced by the active Compose file. They are retained pending explicit
+removal approval.
 
 ## Lifecycle
 
 ```mermaid
 sequenceDiagram
     participant C as Docker Compose
-    participant R as engine.runtime
+    participant R as python -m engine
     participant E as MarketEngine
-    participant S as StorageService
-    C->>R: start container
-    R->>E: construct and start
-    E->>S: initialize schema and WAL
+    participant DB as StorageService
+
+    C->>R: start as price-oracle user
+    R->>E: start()
+    E->>DB: initialize schema and WAL
     E->>E: start workers, restore watchlists, start scheduler
-    R->>R: wait for SIGINT or SIGTERM
-    C->>R: SIGTERM on stop
-    R->>E: stop
-    E->>E: stop scheduler, workers, HTTP resources
-    E->>S: dispose connections
+    R->>R: wait for SIGINT/SIGTERM
+    C->>R: SIGTERM
+    R->>E: stop()
+    E->>E: scheduler → worker drain → HTTP clients
+    E->>DB: dispose
     R-->>C: exit
 ```
 
-The service uses `init: true`, `stop_grace_period: 30s`, and
-`restart: unless-stopped`. Startup and shutdown errors are logged and return a
-non-zero status. SIGINT and SIGTERM request normal graceful shutdown.
+Compose uses `init: true`, `restart: unless-stopped`, and a 20-second stop grace period. The job
+handler's default drain budget is 10 seconds, leaving time for HTTP and database cleanup. Startup
+or shutdown failure produces a non-zero process exit.
 
-## Configuration and secrets
+## Configuration
 
-All engine settings use the `CS2_` prefix declared in
-[`EngineSettings`](../../backend/engine/config/settings.py). Compose defaults
-are in [`compose.yaml`](../../compose.yaml). Override non-secret values with an
-env file:
+Copy the safe example and edit non-secret values:
 
-```dotenv
-# deployment.env -- do not store credentials here
-CS2_WORKER_COUNT=5
-CS2_CSFLOAT_CURRENCY=GBP
-CS2_CSFLOAT_ENABLED=true
-CS2_DATABASE_BUSY_TIMEOUT_SECONDS=5
+```bash
+cp backend/.env.example backend/.env
+docker compose config
 ```
 
-Compose fixes `CS2_DATABASE_PATH` to
-`/var/lib/price-oracle/engine.sqlite3`, backed by the `engine-data` volume. Do
-not change it to a container-local path.
+Compose reads `backend/.env` into the container and always overrides `CS2_DATABASE_PATH` with
+`/data/engine.sqlite3`. All other `CS2_` values are defined by
+[`EngineSettings`](../../backend/engine/config/settings.py). Invalid configuration stops startup.
 
-`CS2_CSFLOAT_API_KEY` and `CS2_DISCORD_WEBHOOK_URL` are optional `SecretStr`
-settings. Their repr is masked; bootstrap unwraps them only to construct the
-marketplace or notification client. CSFloat may run without an API key when its
-public endpoint is sufficient, so no credential is needed merely to start.
+Common values include:
 
-To use Docker Secrets, copy the example override, remove each secret block you
-do not need, create only the remaining secret files, and include it when
-starting:
+```dotenv
+CS2_WORKER_COUNT=5
+CS2_JOB_QUEUE_CAPACITY=100
+CS2_DATABASE_BUSY_TIMEOUT_SECONDS=5
+CS2_CSFLOAT_ENABLED=true
+CS2_CSFLOAT_CURRENCY=GBP
+```
+
+`CS2_CSFLOAT_API_KEY` and `CS2_DISCORD_WEBHOOK_URL` are optional `SecretStr` values. Prefer Docker
+Secrets for production credentials:
 
 ```bash
 cp compose.secrets.yaml.example compose.secrets.yaml
 mkdir -p secrets
+# Create only the files for enabled credentials and keep them out of Git.
 chmod 700 secrets
-# Obtain values from a secret manager; do not paste them into shell history.
 chmod 600 secrets/CS2_CSFLOAT_API_KEY secrets/CS2_DISCORD_WEBHOOK_URL
+docker compose -f compose.yaml -f compose.secrets.yaml config
 docker compose -f compose.yaml -f compose.secrets.yaml up -d --build
 ```
 
-The override maps files to `/run/secrets/CS2_CSFLOAT_API_KEY` and
-`/run/secrets/CS2_DISCORD_WEBHOOK_URL`. The `CS2_` prefix is required in the
-filenames. Precedence is constructor values, environment, `.env`, Docker Secret
-files, then defaults. Invalid values stop startup; no secret file is required by
-the base Compose file.
+The override mounts those files as `/run/secrets/CS2_CSFLOAT_API_KEY` and
+`/run/secrets/CS2_DISCORD_WEBHOOK_URL`. Explicit settings, environment values, and `.env` values
+take precedence over secret files.
 
 ## Operations
 
 ```bash
-# Build and start
-docker compose --env-file deployment.env build
-docker compose --env-file deployment.env up -d
-
-# Status, logs, stop, restart
-docker compose ps
-docker compose logs -f engine
-docker compose stop
-docker compose restart engine
-docker compose down
-
-# Recreate after configuration changes
-docker compose --env-file deployment.env up -d --force-recreate
-```
-
-For a safe SQLite backup, stop the only writer first and copy every volume file,
-including WAL and SHM files when present:
-
-```bash
-docker compose stop engine
-docker volume ls --format '{{.Name}}' | grep '_engine-data$'
-# Substitute the actual volume name shown above.
-docker run --rm -v actual_engine-data:/source:ro -v "$PWD:/backup" \
-  alpine sh -c 'cp -a /source/. /backup/price-oracle-backup'
-docker compose start engine
-```
-
-For a live backup, use SQLite's online-backup tooling instead of copying a
-database file while it is changing.
-
-## SQLite persistence and permissions
-
-`StorageService.initialize()` creates the parent directory, schema, and WAL
-mode. The database plus `-wal` and `-shm` files live in `engine-data` and survive
-container recreation. The image creates `/var/lib/price-oracle` with UID/GID
-10001 before Docker initializes the named volume, and the engine runs as that
-non-root user. Bind mounts must be writable by UID 10001.
-
-## Security and deliberate exclusions
-
-The image excludes Git data, virtual environments, tests, local databases,
-dotenv files, and the ignored `secrets/` directory. It contains no credentials
-and exposes no network port. Prefer Docker Secrets for values that must not
-appear in Compose environment inspection; protect database backups as data.
-
-Redis, PostgreSQL, Celery, Kubernetes, a health endpoint, REST API, and a
-dashboard are deliberately excluded. Existing SQLite storage and the in-process
-scheduler meet the single-container V1 scope with fewer services.
-
-## Testing
-
-[`test_runtime.py`](../../backend/tests/test_runtime.py) covers normal start and
-stop, startup failure, shutdown failure, and repeated signal handling. Existing
-configuration tests cover environment precedence, Docker Secret filename mapping,
-invalid secret values, and `SecretStr` masking; storage tests use temporary
-SQLite databases.
-
-```bash
-# From backend/
-python3 -m pytest -q
-
-# From repository root
-docker compose config
 docker compose build
 docker compose up -d
-docker compose logs engine
+docker compose ps
+docker compose logs -f price-oracle-engine
+docker compose restart price-oracle-engine
+docker compose stop
 docker compose down
 ```
 
-The completion report records the actual results from this checkout.
+Normal `down` retains the named volume. `docker compose down --volumes` deletes the SQLite database
+and is destructive.
 
-Actual validation for this module completed with **373 passing backend tests**
-under an isolated `python:3.12-slim` container. `docker compose config` passed
-for both the base configuration and the Secrets override, the production image
-built successfully, and an isolated Compose smoke test confirmed non-root
-startup, clean SIGTERM shutdown/restart, and survival of `engine.sqlite3` across
-that restart. The test volume was removed after validation.
+For a consistent offline backup, stop the service, identify the actual project-prefixed volume with
+`docker volume ls`, and copy the complete volume contents. Include SQLite `-wal` and `-shm` files if
+present. For a live backup, use SQLite's online backup mechanism instead of copying one file during
+writes.
 
-## Known limitations
+## Persistence and permissions
 
-- This is an engine worker, not a watchlist-management interface. Watchlists
-  must already exist in SQLite or be managed by a future application layer.
-- It is a single-writer SQLite deployment; do not run multiple replicas against
-  the same database volume.
-- Marketplace availability, rate limits, and authentication are external
-  operational concerns.
-- Inspect the actual Compose volume name before running the backup command.
+`price-oracle-data` is mounted at `/data`; the configured database is
+`/data/engine.sqlite3`. The image creates `/data` for the unprivileged `price-oracle` user before
+declaring the volume. Named-volume data survives container replacement and restart. A bind mount,
+if substituted locally, must be writable by the image user.
+
+`StorageService.initialize()` enables WAL for file databases, foreign keys for every connection,
+and a bounded busy timeout. SQLite remains a single-writer design; do not scale this service to
+multiple replicas.
+
+## Security
+
+- The active image copies only engine source and runtime dependencies; tests, frontend, dotenv
+  files, databases, Git data, and `secrets/` are excluded by `.dockerignore`.
+- The container runs without root privileges and exposes no port.
+- Webhook URLs and API keys are not embedded in the image or persisted in delivery rows.
+- Protect the SQLite volume and backups: watchlists, alert rules, market history, and delivery state
+  are application data.
+- The daemon has no network health endpoint. Use container status and logs for this deployment.
+
+## Validation completed on 2026-10-22
+
+- `docker compose config`: passed.
+- Base plus Docker-Secrets override configuration: passed with temporary placeholder secret files.
+- `docker compose build`: passed.
+- Runtime smoke: started as `price-oracle`, created SQLite, retained it across restart, and stopped
+  cleanly on SIGTERM.
+- External collection was disabled during the smoke test; no live marketplace or Discord request
+  was made.
+- The complete backend suite passed 406 tests; frontend build and dependency audits are reported in
+  the [root README](../../README.md).
+
+## Limitations
+
+- The deployed daemon has no API, UI, readiness probe, or metrics endpoint.
+- Watchlists must be seeded through an API process used at a different time/database ownership
+  window, through an embedding application, or directly through supported Python services.
+- There is no automated schema migration or notification recovery worker.
+- Provider availability, credentials, rate limits, and response compatibility require operational
+  monitoring and authorized smoke testing.

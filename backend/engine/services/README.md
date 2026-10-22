@@ -2,7 +2,7 @@
 
 ## CollectionService
 
-`CollectionService` is the small orchestration boundary between future fetch jobs and registered
+`CollectionService` is the small orchestration boundary between fetch jobs and registered
 marketplace adapters. It selects one marketplace, applies that provider's request policy, awaits
 its `fetch()` operation, and returns the resulting `MarketQuote` objects unchanged.
 
@@ -14,7 +14,7 @@ The service does not create marketplace implementations, normalize source payloa
 rank prices, schedule recurring work, or create another worker pool. `JobHandler` remains responsible
 for overall engine concurrency; collection policies govern only provider-specific requests.
 
-### Public interface
+### CollectionService public interface
 
 ```python
 from engine.services import CollectionPolicy, CollectionService
@@ -83,7 +83,7 @@ retryable by default; marketplace-specific timeout types can be included in that
 spacing, retry delay, or `fetch()` propagates to the job system. Async context managers release any
 acquired semaphore permit on cancellation and on ordinary failures.
 
-### Testing
+### CollectionService testing
 
 Collection tests register fake async marketplaces through the concrete `MarketplaceRegistry`. They
 cover unchanged and empty results, lookup errors, retry classification and exhaustion, timeout and
@@ -97,6 +97,19 @@ Run from `backend/`:
 python -m pytest -q tests/test_collection_service.py
 python -m pytest -q
 ```
+
+## MarketplaceComparisonService
+
+[`MarketplaceComparisonService`](comparison.py) is the compatibility orchestration used by the
+existing React UI. It resolves an exact catalog item, concurrently fetches Steam and Skinport
+aggregate snapshots, and asks `PricingService` to compare their GBP `LOWEST_ASK` quotes. It returns
+provider statistics alongside the strict pricing result; FastAPI alone maps that value to the
+frontend's numeric JSON shape.
+
+The service does not persist these on-demand snapshots. Scheduled watchlist collection uses the
+same registered Steam and Skinport providers through `CollectionService` and `FetchMarketJob`, and
+that separate path persists quotes. A missing catalog/Skinport item raises
+`ComparisonNotFoundError`; normalized marketplace errors propagate to the API's `502` mapping.
 
 ## PricingService
 
@@ -140,7 +153,7 @@ backend/
 - [`test_pricing_service.py`](../../tests/test_pricing_service.py) contains deterministic unit and
   domain-model integration tests.
 
-### Public interface
+### PricingService public interface
 
 Construct the service with the maximum acceptable age for an observation, then call its only
 operation:
@@ -230,7 +243,7 @@ policy configurable without adding settings or a clock abstraction. Exact duplic
 conservative: the service does not guess that two similar quotes without listing IDs are the same
 listing.
 
-### Testing
+### PricingService testing
 
 From `backend/`, run:
 
@@ -239,9 +252,8 @@ python -m pytest -q tests/test_pricing_service.py
 python -m pytest -q
 ```
 
-The implementation was verified with Python 3.12: **29 pricing tests passed** and the integrated
-backend suite completed with **374 tests passed**. Tests use synthetic data and require no network,
-database, credentials, or running marketplace.
+The implementation was verified with Python 3.12 as part of the **406-test** backend suite. Pricing
+tests use synthetic data and require no network, database, credentials, or running marketplace.
 
 ### Known limitations and extension points
 
