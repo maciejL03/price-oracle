@@ -168,7 +168,8 @@ sequenceDiagram
 
 The post-persistence hook is deliberately small: quote storage commits before alert processing.
 Failures propagate to `JobHandler`, which logs that job failure and continues running other and
-future jobs. No event bus or second worker system is introduced.
+future jobs. The implemented `EventBus` is not wired into this path, and no second worker system is
+introduced.
 
 Alert semantics remain strict. CSFloat currently emits `INDIVIDUAL_LISTING`, while alerts accept
 only marketplace-native `LOWEST_ASK` observations. Individual listings are persisted and can be
@@ -245,13 +246,13 @@ It covers dependency order, registry composition, handler and scheduler activati
 watchlist restoration, fetch-and-persist, alert/event/delivery integration, recurring job failure
 isolation, partial-start cleanup, graceful active-work shutdown, cancellation, terminal/repeated
 lifecycle calls, owned-resource closure, and orphan-task checks. It performs no live API calls.
-The complete backend suite passes **374 tests** after process and final integration validation.
+The complete backend suite passes **406 tests** after process, API, and final integration
+validation.
 
 Container deployment is defined by [`../Dockerfile`](../Dockerfile) and
 [`../../compose.yaml`](../../compose.yaml). The image runs `python -m engine` as an unprivileged
 user, while Compose mounts SQLite at `/data/engine.sqlite3` and allows signal-driven cleanup before
 container termination.
-The complete backend suite passes **378 tests** after API integration.
 
 ## Known limitations
 
@@ -261,9 +262,9 @@ The complete backend suite passes **378 tests** after API integration.
   `pending` by process termination.
 - There is no durable event-dispatch worker. An alert event committed immediately before a process
   or notification-integration failure remains queryable but is not automatically redelivered.
-- The standalone process is implemented, but the separate FastAPI application does not expose
-  engine state or management endpoints.
-- [`api/`](api/README.md) owns the FastAPI lifespan and starts/stops one engine per ASGI process.
+- [`api/`](api/README.md) exposes engine state and management endpoints, owns the FastAPI lifespan,
+  and starts/stops one engine per ASGI process. It is not included in the daemon-only Compose
+  deployment.
 - SQLite tables are created with SQLAlchemy `create_all`; schema migration tooling is not yet part
   of this repository.
 - Steam and Skinport are aggregate lowest-ask providers for the compatibility comparison API;

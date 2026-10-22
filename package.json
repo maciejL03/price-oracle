@@ -2,7 +2,7 @@
   "name": "price-oracle",
   "private": true,
   "scripts": {
-    "dev:backend": "cd backend && .venv\\Scripts\\uvicorn app.main:app --reload --port 8000",
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build"
   }

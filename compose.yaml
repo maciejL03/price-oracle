@@ -16,26 +16,3 @@ services:
 
 volumes:
   price-oracle-data:
-  engine:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      CS2_DATABASE_PATH: /var/lib/price-oracle/engine.sqlite3
-      CS2_WORKER_COUNT: ${CS2_WORKER_COUNT:-5}
-      CS2_JOB_QUEUE_CAPACITY: ${CS2_JOB_QUEUE_CAPACITY:-100}
-      CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS: ${CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS:-10.0}
-      CS2_DATABASE_BUSY_TIMEOUT_SECONDS: ${CS2_DATABASE_BUSY_TIMEOUT_SECONDS:-5.0}
-      CS2_SCHEDULER_POLL_SECONDS: ${CS2_SCHEDULER_POLL_SECONDS:-0.1}
-      CS2_QUOTE_MAX_AGE_SECONDS: ${CS2_QUOTE_MAX_AGE_SECONDS:-300.0}
-      CS2_CSFLOAT_ENABLED: ${CS2_CSFLOAT_ENABLED:-true}
-      CS2_CSFLOAT_CURRENCY: ${CS2_CSFLOAT_CURRENCY:-GBP}
-      CS2_CSFLOAT_TIMEOUT_SECONDS: ${CS2_CSFLOAT_TIMEOUT_SECONDS:-10.0}
-    init: true
-    restart: unless-stopped
-    stop_grace_period: 30s
-    volumes:
-      - engine-data:/var/lib/price-oracle
-
-volumes:
-  engine-data:

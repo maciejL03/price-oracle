@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from engine.api import create_app
 from engine.bootstrap import create_market_engine
-from engine.catalog import CatalogItem
+from engine.catalog import CatalogItem, CatalogUnavailableError
 from engine.config import EngineSettings
 from engine.errors import MarketplaceUnavailableError
 from engine.marketplaces import SkinportSnapshot, SteamSnapshot
@@ -76,8 +76,11 @@ class FakeComparisons:
     def __init__(self) -> None:
         self.comparison = _comparison()
         self.error: Exception | None = None
+        self.search_error: Exception | None = None
 
     async def search(self, query: str, *, limit: int) -> list[CatalogItem]:
+        if self.search_error is not None:
+            raise self.search_error
         return [ITEM][:limit] if query.lower() in "redline" else []
 
     async def compare(self, market_hash_name: str) -> MarketplaceComparison:
@@ -201,6 +204,27 @@ def test_comparison_not_found_and_marketplace_errors_keep_meaningful_statuses() 
     assert unavailable.json() == {"detail": "Marketplace error: provider unavailable"}
 
 
+def test_catalog_failures_are_reported_as_upstream_errors() -> None:
+    comparisons = FakeComparisons()
+    comparisons.search_error = CatalogUnavailableError("catalog unavailable")
+    client, _ = _client(comparisons)
+    with client:
+        search = client.get("/api/items/search", params={"q": "red"})
+
+    comparisons = FakeComparisons()
+    comparisons.error = CatalogUnavailableError("catalog unavailable")
+    client, _ = _client(comparisons)
+    with client:
+        comparison = client.get(
+            "/api/prices/compare", params={"market_hash_name": ITEM.market_hash_name}
+        )
+
+    assert search.status_code == 502
+    assert search.json() == {"detail": "Catalog error: catalog unavailable"}
+    assert comparison.status_code == 502
+    assert comparison.json() == {"detail": "Catalog error: catalog unavailable"}
+
+
 def test_engine_native_routes_use_the_running_engine_services(tmp_path: Path) -> None:
     class FakeMarketplace:
         name = "fake"
@@ -240,6 +264,29 @@ def test_engine_native_routes_use_the_running_engine_services(tmp_path: Path) ->
                 "threshold": "20.00",
             },
         )
+        unknown_alert = client.post(
+            "/api/alerts",
+            json={
+                "market_hash_name": ITEM.market_hash_name,
+                "marketplace": "missing",
+                "currency": "GBP",
+                "condition": "below",
+                "threshold": "20.00",
+            },
+        )
+        invalid_alert = client.post(
+            "/api/alerts",
+            json={
+                "market_hash_name": ITEM.market_hash_name,
+                "marketplace": "NOT VALID",
+                "currency": "GBP",
+                "condition": "below",
+                "threshold": "20.00",
+            },
+        )
+        invalid_watchlist = client.post(
+            "/api/watchlists", json={"name": "   ", "interval_seconds": 60}
+        )
         listed_alerts = client.get("/api/alerts")
 
     assert marketplaces.json() == {"marketplaces": ["fake"]}
@@ -251,6 +298,12 @@ def test_engine_native_routes_use_the_running_engine_services(tmp_path: Path) ->
     assert history.status_code == 200
     assert history.json() == {"quotes": []}
     assert created_alert.status_code == 201
+    assert unknown_alert.status_code == 422
+    assert unknown_alert.json() == {
+        "detail": "Marketplace is not registered: missing"
+    }
+    assert invalid_alert.status_code == 422
+    assert invalid_watchlist.status_code == 422
     assert listed_alerts.json()["rules"] == [created_alert.json()]
 
 

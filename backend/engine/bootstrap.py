@@ -21,7 +21,11 @@ from engine.marketplaces import (
 )
 from engine.models import Item, MarketQuote, QuoteType
 from engine.notifications import NotificationService
-from engine.services import CollectionService, MarketplaceComparisonService, PricingService
+from engine.services import (
+    CollectionService,
+    MarketplaceComparisonService,
+    PricingService,
+)
 from engine.storage import StorageService
 from engine.watchlists import WatchlistService
 
@@ -86,7 +90,9 @@ def create_market_engine(
             timeout_seconds=actual_settings.http_timeout_seconds,
         )
         configured.extend((steam, skinport))
-        owned_closers.extend((catalog.aclose, steam.aclose, skinport.aclose))
+        # The catalog is not a registered marketplace, so it needs its own
+        # lifecycle entry. Registered provider closers are added once below.
+        owned_closers.append(catalog.aclose)
         providers = tuple(configured)
     else:
         providers = tuple(marketplaces)

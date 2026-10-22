@@ -11,6 +11,20 @@ from typing import Protocol
 
 import httpx
 
+from engine.errors import EngineError
+
+
+class CatalogError(EngineError):
+    """Base exception for canonical item-catalog failures."""
+
+
+class CatalogUnavailableError(CatalogError, ConnectionError):
+    """Raised when the remote item catalog cannot currently be read."""
+
+
+class CatalogResponseError(CatalogError, ValueError):
+    """Raised when the remote item catalog returns unusable data."""
+
 
 @dataclass(frozen=True, slots=True)
 class CatalogItem:
@@ -90,27 +104,64 @@ class ByMykelItemCatalog:
             await self._client.aclose()
 
     async def _ensure_loaded(self) -> None:
-        if self._items and time.monotonic() - self._loaded_at < self._cache_ttl_seconds:
+        if (
+            self._items
+            and time.monotonic() - self._loaded_at < self._cache_ttl_seconds
+        ):
             return
         async with self._load_lock:
-            if self._items and time.monotonic() - self._loaded_at < self._cache_ttl_seconds:
+            if (
+                self._items
+                and time.monotonic() - self._loaded_at < self._cache_ttl_seconds
+            ):
                 return
             raw = await self._read_fresh_cache()
             if raw is None:
-                response = await self._client.get(self._url, timeout=self._timeout_seconds)
-                response.raise_for_status()
-                raw = response.json()
+                try:
+                    response = await self._client.get(
+                        self._url, timeout=self._timeout_seconds
+                    )
+                    response.raise_for_status()
+                except httpx.TimeoutException as error:
+                    raise CatalogUnavailableError(
+                        "item catalog request timed out"
+                    ) from error
+                except httpx.HTTPStatusError as error:
+                    raise CatalogUnavailableError(
+                        f"item catalog returned HTTP {error.response.status_code}"
+                    ) from error
+                except httpx.RequestError as error:
+                    raise CatalogUnavailableError(
+                        "item catalog request failed"
+                    ) from error
+                try:
+                    raw = response.json()
+                except ValueError as error:
+                    raise CatalogResponseError(
+                        "item catalog returned invalid JSON"
+                    ) from error
                 await asyncio.to_thread(self._write_cache, raw)
-            self._populate(raw)
+            try:
+                self._populate(raw)
+            except ValueError as error:
+                raise CatalogResponseError(
+                    "item catalog response must be an object"
+                ) from error
             self._loaded_at = time.monotonic()
 
     async def _read_fresh_cache(self) -> dict[object, object] | None:
         def read() -> dict[object, object] | None:
             if not self._cache_path.exists():
                 return None
-            if time.time() - self._cache_path.stat().st_mtime >= self._cache_ttl_seconds:
+            if (
+                time.time() - self._cache_path.stat().st_mtime
+                >= self._cache_ttl_seconds
+            ):
                 return None
-            value = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            try:
+                value = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return None
             return value if isinstance(value, dict) else None
 
         return await asyncio.to_thread(read)
