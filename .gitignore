@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+secrets/
 *.egg-info/
 dist/
 build/
@@ -16,6 +17,10 @@ frontend/.vite/
 # Cache
 backend/.cache/
 *.log
+
+# Deployment credentials
+secrets/
+compose.secrets.yaml
 
 # IDE
 .vscode/

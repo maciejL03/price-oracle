@@ -1,0 +1,18 @@
+services:
+  price-oracle-engine:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      CS2_DATABASE_PATH: /data/engine.sqlite3
+    volumes:
+      - price-oracle-data:/data
+
+volumes:
+  price-oracle-data:
