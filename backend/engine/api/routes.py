@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import ValidationError
 
 from engine.alerts import AlertCondition, AlertRule
-from engine.catalog import ItemCatalog
+from engine.catalog import CatalogError
 from engine.errors import MarketplaceError
 from engine.market_engine import MarketEngine
 from engine.models import Item, MarketQuote, QuoteType
@@ -16,20 +16,16 @@ from engine.watchlists import Watchlist, WatchlistNotFoundError
 
 from .dependencies import get_catalog, get_comparisons, get_engine
 from .schemas import (
-    CatalogItemSchema,
-    ComparisonResponse,
-    AlertEventCollectionResponse,
-    AlertEventResponse,
     AlertRuleCollectionResponse,
     AlertRuleCreateRequest,
     AlertRuleResponse,
-    SearchResponse,
-    StoredComparisonResponse,
-    SystemStatusResponse,
+    CatalogItemSchema,
+    ComparisonResponse,
     MarketplaceResponse,
     NotificationDeliveryResponse,
     QuoteCollectionResponse,
     QuoteResponse,
+    SearchResponse,
     SkinportPriceSchema,
     SteamPriceSchema,
     WatchlistCollectionResponse,
@@ -72,7 +68,12 @@ async def search_items(
     limit: int = Query(default=20, ge=1, le=50),
     catalog: ItemCatalog = Depends(get_catalog),
 ) -> SearchResponse:
-    items = await catalog.search(q, limit=limit)
+    try:
+        items = await comparisons.search(q, limit=limit)
+    except CatalogError as error:
+        raise HTTPException(
+            status_code=502, detail=f"Catalog error: {error}"
+        ) from error
     return SearchResponse(
         items=[
             CatalogItemSchema(
@@ -92,6 +93,10 @@ async def compare_prices(
 ) -> ComparisonResponse:
     try:
         comparison = await comparisons.compare(market_hash_name)
+    except CatalogError as error:
+        raise HTTPException(
+            status_code=502, detail=f"Catalog error: {error}"
+        ) from error
     except ComparisonNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except MarketplaceError as error:
@@ -299,6 +304,10 @@ async def create_alert_rule(
     payload: AlertRuleCreateRequest,
     engine: MarketEngine = Depends(get_engine),
 ) -> AlertRuleResponse:
+    try:
+        engine.registry.get(payload.marketplace)
+    except MarketplaceError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     rule = AlertRule(
         id=uuid4(),
         item=_item_or_422(payload.market_hash_name),

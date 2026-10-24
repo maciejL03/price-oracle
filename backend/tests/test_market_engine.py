@@ -10,6 +10,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+import engine.bootstrap as bootstrap_module
 from engine.alerts import AlertCondition, AlertRule
 from engine.bootstrap import create_market_engine
 from engine.config import EngineSettings
@@ -151,6 +152,53 @@ async def test_bootstrap_starts_restores_fetches_and_stops_cleanly(
         assert len(history) == 1
         assert history[0].marketplace == "fake"
         assert history[0].quote_type is QuoteType.INDIVIDUAL_LISTING
+
+
+@pytest.mark.asyncio
+async def test_default_bootstrap_closes_each_owned_http_resource_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_counts: dict[str, int] = {"catalog": 0, "steam": 0, "skinport": 0}
+
+    class Catalog:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def search(self, query: str, *, limit: int) -> list[object]:
+            return []
+
+        async def resolve(self, market_hash_name: str) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            close_counts["catalog"] += 1
+
+    class Provider:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def fetch(self, item: Item) -> list[MarketQuote]:
+            return []
+
+        async def fetch_snapshot(self, item: Item) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            close_counts[self.name] += 1
+
+    monkeypatch.setattr(bootstrap_module, "ByMykelItemCatalog", Catalog)
+    monkeypatch.setattr(
+        bootstrap_module, "SteamMarketplace", lambda **_: Provider("steam")
+    )
+    monkeypatch.setattr(
+        bootstrap_module, "SkinportMarketplace", lambda **_: Provider("skinport")
+    )
+
+    engine = create_market_engine(_settings(tmp_path / "engine.sqlite3"))
+    await engine.start()
+    await engine.stop()
+
+    assert close_counts == {"catalog": 1, "steam": 1, "skinport": 1}
 
 
 @pytest.mark.asyncio

@@ -82,8 +82,8 @@ money is parsed as `Decimal`; the final compatibility adapter emits the establis
 `difference` and `percentage` are calculated from `PricingService`'s ranked lowest-ask quotes,
 not by a route-local pricing implementation.
 
-`404` means the catalog item or Skinport observation is missing. Normalized marketplace failures
-become `502` with a safe message. FastAPI validates malformed query values with `422`.
+`404` means the catalog item or Skinport observation is missing. Normalized catalog and marketplace
+failures become `502` with a safe message. FastAPI validates malformed query values with `422`.
 
 ### Engine-native routes
 
@@ -114,6 +114,11 @@ fetch in the request handler. No authentication exists in the prior application 
 these management endpoints must be network-restricted until an authentication/ownership model is
 added.
 
+Alert creation verifies that the marketplace is registered. CSFloat is registered but emits only
+`INDIVIDUAL_LISTING` observations, so a CSFloat rule can be stored but cannot trigger the current
+`LOWEST_ASK`-only alert evaluator. Steam, Skinport, and injected providers that genuinely emit
+lowest asks can drive those rules through scheduled watchlist collection.
+
 ## Marketplace migration
 
 The engine owns the catalogs and providers needed by the frontend. Demo mode uses bundled data;
@@ -140,6 +145,8 @@ remove those unmounted modules in a separately reviewed change.
 ## Error handling and security
 
 - Request schemas and FastAPI query validation return `422` for malformed input.
+- Alert creation rejects malformed or unregistered marketplace identifiers with `422` before
+  persistence.
 - Missing resources return `404`; marketplace errors return `502`; SQLite contention returns
   `503`; other storage failures produce a non-sensitive `500` response.
 - Marketplace clients translate network/provider errors and do not expose credentials.
@@ -162,7 +169,7 @@ python -m pytest -q tests/test_engine_api.py
 python -m pytest -q
 ```
 
-Current repository result: **411 passed, 1 warning**. The warning is FastAPI's
+Audit result: **406 passed, 1 warning** in the complete backend suite. The warning is FastAPI's
 upstream deprecation notice for Starlette `TestClient`/`httpx`; it does not affect API behavior.
 The frontend TypeScript/Vite build and Docker API proxy smoke test also completed successfully.
 

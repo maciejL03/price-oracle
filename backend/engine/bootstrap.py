@@ -27,13 +27,8 @@ from engine.marketplaces import (
     SteamMarketplace,
 )
 from engine.models import Item, MarketQuote, QuoteType
-from engine.notifications import (
-    NotificationService,
-    SimulatedNotificationService,
-    validate_discord_webhook_url,
-)
+from engine.notifications import NotificationService
 from engine.services import (
-    CollectionPolicy,
     CollectionService,
     MarketplaceComparisonService,
     PricingService,
@@ -100,31 +95,36 @@ def create_market_engine(
                 cache_ttl_seconds=actual_settings.catalog_cache_ttl_seconds,
                 timeout_seconds=actual_settings.http_timeout_seconds,
             )
-            owned_closers.append(catalog.aclose)
-            if actual_settings.steam_enabled:
-                steam = SteamMarketplace(
-                    country=actual_settings.steam_country,
-                    currency_code=actual_settings.steam_currency_code,
-                    currency=actual_settings.steam_currency,
-                    app_id=actual_settings.steam_app_id,
-                    user_agent=actual_settings.user_agent,
-                    timeout_seconds=actual_settings.http_timeout_seconds,
-                    cache_ttl_seconds=actual_settings.steam_cache_ttl_seconds,
-                )
-                configured.append(steam)
-            if actual_settings.skinport_enabled:
-                skinport = SkinportMarketplace(
-                    currency=actual_settings.skinport_currency,
-                    app_id=actual_settings.steam_app_id,
-                    base_url=actual_settings.skinport_base_url,
-                    cache_path=(
-                        actual_settings.cache_dir
-                        / f"skinport_{actual_settings.skinport_currency.lower()}.json"
-                    ),
-                    cache_ttl_seconds=actual_settings.skinport_cache_ttl_seconds,
-                    timeout_seconds=actual_settings.http_timeout_seconds,
-                )
-                configured.append(skinport)
+            configured.append(csfloat)
+        catalog = ByMykelItemCatalog(
+            url=actual_settings.catalog_url,
+            cache_path=actual_settings.cache_dir / "bymykel_items.json",
+            cache_ttl_seconds=actual_settings.catalog_cache_ttl_seconds,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        steam = SteamMarketplace(
+            country=actual_settings.steam_country,
+            currency_code=actual_settings.steam_currency_code,
+            currency=actual_settings.steam_currency,
+            app_id=actual_settings.steam_app_id,
+            user_agent=actual_settings.user_agent,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        skinport = SkinportMarketplace(
+            currency=actual_settings.skinport_currency,
+            app_id=actual_settings.steam_app_id,
+            base_url=actual_settings.skinport_base_url,
+            cache_path=(
+                actual_settings.cache_dir
+                / f"skinport_{actual_settings.skinport_currency.lower()}.json"
+            ),
+            cache_ttl_seconds=actual_settings.skinport_cache_ttl_seconds,
+            timeout_seconds=actual_settings.http_timeout_seconds,
+        )
+        configured.extend((steam, skinport))
+        # The catalog is not a registered marketplace, so it needs its own
+        # lifecycle entry. Registered provider closers are added once below.
+        owned_closers.append(catalog.aclose)
         providers = tuple(configured)
     else:
         providers = tuple(marketplaces)

@@ -113,7 +113,12 @@ async def run_market_engine(
     shutdown_event: asyncio.Event | None = None,
     handle_signals: bool = True,
 ) -> None:
-    """Run an already-composed engine until an explicit shutdown request."""
+    """Run an already-composed engine until shutdown is requested.
+
+    This is the embedding API used by ``python -m engine`` and integration
+    tests.  The factory-based :func:`run` entry point remains available for the
+    standalone Docker runtime.
+    """
     if not isinstance(engine, MarketEngine):
         raise TypeError("engine must be a MarketEngine")
     if shutdown_event is not None and not isinstance(shutdown_event, asyncio.Event):

@@ -13,7 +13,11 @@ from typing import Any
 
 import httpx
 
-from engine.errors import MarketplaceResponseError, MarketplaceTimeoutError, MarketplaceUnavailableError
+from engine.errors import (
+    MarketplaceResponseError,
+    MarketplaceTimeoutError,
+    MarketplaceUnavailableError,
+)
 from engine.models import Item, MarketQuote, QuoteType
 
 
@@ -106,7 +110,10 @@ class SkinportMarketplace:
                 return None
             if time.time() - self._cache_path.stat().st_mtime >= self._cache_ttl_seconds:
                 return None
-            value = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            try:
+                value = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return None
             return value if isinstance(value, list) else None
 
         return await asyncio.to_thread(read)

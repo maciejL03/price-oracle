@@ -95,11 +95,18 @@ class WatchlistItemRequest(BaseModel):
 
 class WatchlistCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    interval_seconds: float = Field(gt=0)
+    interval_seconds: float = Field(gt=0, allow_inf_nan=False)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip() or value != value.strip():
+            raise ValueError("name must be non-empty without surrounding whitespace")
+        return value
 
 
 class WatchlistUpdateRequest(BaseModel):
-    interval_seconds: float = Field(gt=0)
+    interval_seconds: float = Field(gt=0, allow_inf_nan=False)
 
 
 class WatchlistItemResponse(BaseModel):
@@ -120,10 +127,14 @@ class WatchlistCollectionResponse(BaseModel):
 
 class AlertRuleCreateRequest(BaseModel):
     market_hash_name: str = Field(min_length=1, max_length=200)
-    marketplace: str = Field(min_length=1, max_length=100)
+    marketplace: str = Field(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     condition: str = Field(pattern=r"^(below|above)$")
-    threshold: Decimal = Field(gt=0)
+    threshold: Decimal = Field(gt=0, allow_inf_nan=False)
 
     @field_validator("threshold", mode="before")
     @classmethod

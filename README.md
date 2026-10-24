@@ -1,56 +1,260 @@
 # Price Oracle
 
-Price Oracle is a self-hosted Counter-Strike 2 marketplace monitor. It schedules marketplace
-collection, stores exact `Decimal` observations in SQLite, compares compatible prices, evaluates
-durable threshold alerts, and records notification outcomes.
+Price Oracle is a self-hosted Counter-Strike 2 market monitor and price-comparison application.
+It combines a React comparison UI, a FastAPI transport, asynchronous marketplace adapters,
+persistent watchlists, scheduled collection, exact-price SQLite storage, threshold alerts, and
+optional Discord notifications.
 
-## Quick start — no API keys required
+The project is suitable for local development and controlled self-hosted testing. External
+provider compatibility is covered with mocked responses, not authorized live tests. It is not a
+trading system and does not provide currency conversion, fee/profit calculations, forecasting,
+multi-user authorization, or exactly-once webhook delivery.
 
-Prerequisites: Docker Engine with Docker Compose v2. No `.env`, secret files, marketplace account,
-Steam session, API subscription, or Discord webhook is needed.
+## Current capabilities and boundaries
 
-```bash
-git clone <repository-url>
-cd price-oracle
-docker compose up --build -d
+- The frontend searches the ByMykel catalog and compares current Steam and Skinport lowest asks.
+- FastAPI preserves those frontend contracts and exposes stored quotes, history, marketplaces,
+  watchlist management, lowest-ask alert rules, and notification-delivery status.
+- A single FastAPI lifespan owns a single `MarketEngine`; no engine is created per request.
+- The standalone daemon restores watchlists, runs non-overlapping recurring fetches, evaluates
+  alerts after quote commits, and optionally delivers Discord notifications.
+- Steam and Skinport emit `LOWEST_ASK`; CSFloat emits `INDIVIDUAL_LISTING`. CSFloat observations
+  are stored and priceable but cannot trigger the implemented lowest-ask alert rules.
+- The React UI does not yet expose history, watchlists, alerts, or notification state even though
+  the backend routes exist.
+- Docker Compose runs the engine daemon only. Run the API separately when using the web UI, and do
+  not point both processes at the same writable database.
+- `EventBus` is a tested, in-memory utility but has no production publisher or subscriber wiring.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Browser[React frontend] -->|HTTP /api| API[FastAPI engine.api]
+    API --> Comparison[MarketplaceComparisonService]
+    API --> Watchlists[WatchlistService]
+    API --> Alerts[AlertService]
+    API --> Storage[(StorageService / SQLite)]
+
+    Comparison --> Catalog[ByMykelItemCatalog]
+    Comparison --> Pricing[PricingService]
+    Comparison --> Steam[SteamMarketplace]
+    Comparison --> Skinport[SkinportMarketplace]
+
+    Watchlists --> Scheduler[JobScheduler]
+    Scheduler --> Handler[JobHandler]
+    Handler --> Fetch[FetchMarketJob]
+    Fetch --> Collection[CollectionService]
+    Collection --> Registry[MarketplaceRegistry]
+    Registry --> CSFloat[CSFloatMarketplace]
+    Registry --> Steam
+    Registry --> Skinport
+    Fetch -->|commit batch| Storage
+    Fetch -->|post-commit hook| Alerts
+    Alerts --> Storage
+    Alerts --> Notifications[NotificationService]
+    Notifications --> Storage
+    Notifications --> Discord[Discord webhook]
+
+    EventBus[EventBus: available, currently unwired]
 ```
 
-Open <http://127.0.0.1:5173>. The API is available at <http://127.0.0.1:8000>, and its health
-endpoint is:
+The database is the durable source of truth. The job post-persistence hook—not EventBus—currently
+connects stored lowest asks to alert evaluation and notification delivery.
 
-```bash
-curl --fail http://127.0.0.1:8000/api/health
-# {"status":"ok"}
+## Frontend request flow
+
+```mermaid
+sequenceDiagram
+    participant UI as React UI
+    participant API as FastAPI
+    participant C as MarketplaceComparisonService
+    participant M as Steam + Skinport
+    participant P as PricingService
+
+    UI->>API: GET /api/prices/compare?market_hash_name=...
+    API->>C: compare(name)
+    C->>M: fetch_snapshot(exact Item), concurrently
+    M-->>C: normalized LOWEST_ASK snapshots
+    C->>P: compare(GBP, LOWEST_ASK, as_of)
+    P-->>C: compatible ranked quotes
+    C-->>API: MarketplaceComparison
+    API-->>UI: legacy-compatible numeric JSON
 ```
 
-The default is **offline demo mode**. The page says `SIMULATED DATA`, uses only bundled fixtures,
-and makes no marketplace requests. A sample watchlist and alert are seeded idempotently. The real
-scheduler and worker run collection through `MarketplaceRegistry` and `CollectionService`; quotes,
-alert state, events, and simulated delivery outcomes are written to real SQLite storage.
+Search follows the same transport boundary through `MarketplaceComparisonService.search()` and
+`ByMykelItemCatalog`. Marketplace and catalog clients are long-lived engine-owned resources.
 
-Useful commands:
+## Market collection
 
-```bash
-docker compose ps
-docker compose logs -f api frontend
-docker compose restart api
-docker compose down                  # preserves data
-docker compose down --volumes        # deletes demo data; destructive
+```mermaid
+flowchart LR
+    DB[(Persisted watchlists)] --> Reconcile[WatchlistService.sync_jobs]
+    Reconcile --> Scheduler[JobScheduler]
+    Scheduler -->|due, non-overlapping| Handler[Bounded JobHandler]
+    Handler --> Fetch[FetchMarketJob]
+    Fetch --> Collect[CollectionService]
+    Collect --> Registry[MarketplaceRegistry]
+    Registry --> Provider[Marketplace.fetch]
+    Provider --> Normalize[MarketQuote normalization]
+    Normalize --> Fetch
+    Fetch -->|atomic batch| DB
 ```
 
-The named `price-oracle-data` volume survives ordinary stop, restart, container recreation, and
-`docker compose down`. Only use `down --volumes` when you intentionally want a clean demo database.
+Fetch identity is the marketplace plus exact Steam market hash name. Shared watchlist entries use
+one schedule at the shortest requested interval. Queue capacity, worker concurrency, retries,
+provider admission, cancellation, and shutdown are bounded.
 
-## Practical Docker smoke test
+## Events, alerts, and notifications
 
-Run the complete isolated demonstration from the repository root:
+```mermaid
+sequenceDiagram
+    participant F as FetchMarketJob
+    participant DB as StorageService
+    participant A as AlertService
+    participant N as NotificationService
+    participant D as Discord
+    participant E as EventBus
 
-```bash
-python3 scripts/smoke_test.py --mode demo
+    F->>DB: save_quotes(batch)
+    DB-->>F: committed
+    Note over F,E: No production EventBus publication is wired
+    loop each LOWEST_ASK quote
+        F->>A: evaluate(quote, as_of)
+        A->>DB: commit state and optional AlertEvent
+        DB-->>A: durable event or no transition
+        opt event and webhook configured
+            A-->>N: durable AlertEvent
+            N->>DB: claim delivery
+            N->>D: bounded POST/retry
+            N->>DB: persist outcome
+        end
+    end
 ```
 
-The script creates a uniquely named Compose project on ports 15173/18000, builds and starts both
-containers, and verifies:
+Rules are strict above/below comparisons on exact item, marketplace, currency, and
+`LOWEST_ASK` semantics. They trigger only on inactive-to-active edges, rearm after a newer false
+observation, and preserve state across restarts. Notification claims suppress concurrent duplicate
+calls but cannot make SQLite and Discord one transaction; a crash may leave a `pending` record.
+
+`EventBus.publish()` dispatches exact event types serially in registration order. Independent
+publish calls may run concurrently; subscriber failures are collected into an `ExceptionGroup`,
+cancellation propagates immediately, and no background task or durable queue exists.
+
+## Application lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Constructed
+    Constructed --> Starting: API lifespan or python -m engine
+    Starting --> Running: storage → workers → watchlists → scheduler
+    Starting --> Stopped: failure / rollback
+    Running --> Stopping: lifespan exit, SIGINT, SIGTERM, cancellation
+    Stopping --> Stopped: scheduler → workers → HTTP resources → storage
+    Stopped --> [*]
+```
+
+Use one ownership mode per database:
+
+- `uvicorn app.main:app --workers 1` starts the API and one engine in the FastAPI lifespan.
+- `python -m engine` starts the engine-only daemon.
+- Docker Compose uses the daemon mode and exposes no HTTP port.
+
+Running multiple ASGI workers, a daemon plus API, or multiple Compose replicas against the same
+database would create independent schedulers for the same persisted watchlists and is unsupported.
+
+## API/frontend compatibility matrix
+
+| Feature | Endpoint and request | Response shape | Implementation | Coverage | Status |
+|---|---|---|---|---|---|
+| Health | `GET /api/health` | `{"status":"ok"}` | `MarketEngine.running` | API test | Working |
+| Item search | `GET /api/items/search?q=&limit=` | `{items:[{market_hash_name,name,image}]}` | Catalog via comparison service | API + mocked catalog | Working; UI uses it |
+| Price comparison | `GET /api/prices/compare?market_hash_name=` | Steam/Skinport fields plus `cheaper`, `difference`, `percentage` | Live snapshots + `PricingService` | API + mocked providers | Working; UI uses it |
+| Marketplaces | `GET /api/marketplaces` | `{marketplaces:[...]}` | Registry | API integration | Working; no UI |
+| Latest stored quotes | `GET /api/items/{name}/quotes` with optional provider/currency/type | `{quotes:[...]}` with decimal strings and UTC timestamps | Storage | API/storage tests | Working; no UI |
+| Price history | `GET /api/items/{name}/history` with filters/range/limit | `{quotes:[...]}` | Storage | API/storage tests | Working; no UI |
+| Watchlists | `POST/GET /api/watchlists`, `PATCH/DELETE /api/watchlists/{id}` | Watchlist aggregate | Watchlist service | API + restart integration | Working; no UI |
+| Watchlist items | `PUT .../items`, `DELETE .../items/{name}` | Updated watchlist | Watchlist service | API/service tests | Working; no UI |
+| Alert rules | `POST/GET /api/alerts`, `DELETE /api/alerts/{id}` | Lowest-ask rule with decimal threshold | Alert service | API + alert integration | Working; no UI; CSFloat rules cannot fire |
+| Notification state | `GET /api/notifications/{event_id}` | Claimed delivery state | Storage | service/storage tests | Working; no event-list route or UI |
+
+There is no authentication or authorization. Management endpoints must be network-restricted.
+CORS defaults to the local Vite origins and is configurable with `CS2_CORS_ORIGINS` using the
+Pydantic Settings list format.
+
+## Source code map
+
+| Source | Main entry | Responsibility | Important dependencies |
+|---|---|---|---|
+| [`backend/app/main.py`](backend/app/main.py) | `app` | ASGI compatibility entry point | `engine.api.create_app` |
+| [`backend/engine/api/app.py`](backend/engine/api/app.py) | `create_app()` | FastAPI factory, lifespan, CORS, storage errors | Bootstrap, `MarketEngine` |
+| [`backend/engine/api/routes.py`](backend/engine/api/routes.py) | `router` | Frontend-compatible and engine-native HTTP routes | Engine services |
+| [`backend/engine/bootstrap.py`](backend/engine/bootstrap.py) | `create_market_engine()` | Composition root and post-commit integration | All engine services |
+| [`backend/engine/market_engine.py`](backend/engine/market_engine.py) | `MarketEngine` | Ordered lifecycle and cleanup | Storage, jobs, owned clients |
+| [`backend/engine/runtime.py`](backend/engine/runtime.py) | `run_market_engine()`, `run()` | Signal-aware daemon/embedding lifecycle | `asyncio`, engine |
+| [`backend/engine/catalog.py`](backend/engine/catalog.py) | `ByMykelItemCatalog` | Cached canonical item lookup | `httpx`, JSON cache |
+| [`backend/engine/models/quote.py`](backend/engine/models/quote.py) | `MarketQuote`, `QuoteType` | Precise normalized observations | Pydantic, `Decimal` |
+| [`backend/engine/marketplaces/registry.py`](backend/engine/marketplaces/registry.py) | `MarketplaceRegistry` | Explicit provider registration/lookup | Marketplace protocol |
+| [`backend/engine/marketplaces/csfloat.py`](backend/engine/marketplaces/csfloat.py) | `CSFloatMarketplace` | CSFloat individual listings | `httpx` |
+| [`backend/engine/marketplaces/steam.py`](backend/engine/marketplaces/steam.py) | `SteamMarketplace` | Steam aggregate snapshot | `httpx` |
+| [`backend/engine/marketplaces/skinport.py`](backend/engine/marketplaces/skinport.py) | `SkinportMarketplace` | Cached Skinport aggregate snapshot | `httpx`, Brotli |
+| [`backend/engine/services/collection.py`](backend/engine/services/collection.py) | `CollectionService` | Provider admission and retries | Registry, `asyncio` |
+| [`backend/engine/services/pricing.py`](backend/engine/services/pricing.py) | `PricingService` | Strict compatibility/freshness/ranking | Domain models |
+| [`backend/engine/services/comparison.py`](backend/engine/services/comparison.py) | `MarketplaceComparisonService` | Frontend comparison orchestration | Catalog, providers, pricing |
+| [`backend/engine/jobs/handler.py`](backend/engine/jobs/handler.py) | `JobHandler` | Bounded workers, queue, deduplication | `asyncio` |
+| [`backend/engine/jobs/scheduler.py`](backend/engine/jobs/scheduler.py) | `JobScheduler` | Completion-relative recurrence | Job handler |
+| [`backend/engine/jobs/fetch_market.py`](backend/engine/jobs/fetch_market.py) | `FetchMarketJob` | Collect, commit, post-commit callback | Collection, storage |
+| [`backend/engine/storage/service.py`](backend/engine/storage/service.py) | `StorageService` | Public persistence boundary | SQLAlchemy, SQLite |
+| [`backend/engine/watchlists/service.py`](backend/engine/watchlists/service.py) | `WatchlistService` | Durable monitoring configuration | Storage, scheduler, registry |
+| [`backend/engine/alerts/service.py`](backend/engine/alerts/service.py) | `AlertService` | Durable edge-trigger evaluation | Storage protocol |
+| [`backend/engine/notifications/service.py`](backend/engine/notifications/service.py) | `NotificationService` | Discord retry and durable outcomes | `httpx`, storage |
+| [`backend/engine/events/bus.py`](backend/engine/events/bus.py) | `EventBus` | Typed in-process dispatch; currently unwired | `asyncio` |
+| [`frontend/src/api/client.ts`](frontend/src/api/client.ts) | `searchItems()`, `comparePrices()` | Browser HTTP client | Fetch API |
+| [`compose.yaml`](compose.yaml) | `price-oracle-engine` | Engine-only deployment | [`backend/Dockerfile`](backend/Dockerfile) |
+
+## Module documentation
+
+- [Engine lifecycle](backend/engine/README.md)
+- [Engine API](backend/engine/api/README.md)
+- [Configuration](backend/engine/config/README.md)
+- [Domain models](backend/engine/models/README.md)
+- [Marketplace adapters](backend/engine/marketplaces/README.md)
+- [Collection, comparison, and pricing](backend/engine/services/README.md)
+- [Jobs and scheduling](backend/engine/jobs/README.md)
+- [Storage](backend/engine/storage/README.md)
+- [Watchlists](backend/engine/watchlists/README.md)
+- [Alerts](backend/engine/alerts/README.md)
+- [Notifications](backend/engine/notifications/README.md)
+- [EventBus](backend/engine/events/README.md)
+- [Docker deployment](docs/deployment/README.md)
+
+## Design decisions
+
+- **Python asyncio:** network, SQLite, webhook, and scheduling work is I/O-bound; cancellation also
+  gives lifecycle code one shutdown model.
+- **Bounded `JobHandler`:** fixed workers and a bounded queue make load and memory behavior
+  explicit. A task-per-fetch design would be unbounded.
+- **Completion-relative `JobScheduler`:** recurring jobs do not overlap or accumulate missed runs.
+  A distributed scheduler is deferred because deployment is intentionally single-process.
+- **Explicit marketplace registration:** composition determines available providers and resource
+  ownership. Runtime module discovery and global mutable registries are unnecessary.
+- **Shared `CollectionService`:** provider concurrency, spacing, backoff, and `Retry-After` state
+  apply across all fetch jobs without leaking those policies into adapters.
+- **One `StorageService`:** ORM/session details remain private, and consistency-sensitive alert and
+  notification transitions have a single transactional owner. A repository framework or write
+  queue would add layers without solving a current problem.
+- **SQLite in WAL mode:** it is simple and durable for one self-hosted node with concurrent reads.
+  Multi-writer scaling and schema migrations are deferred.
+- **Dependency injection:** clocks, clients, providers, policies, and storage can be replaced in
+  deterministic tests without a DI framework.
+- **Separate pricing, alert, and notification services:** compatibility/ranking, durable trigger
+  state, and external delivery remain independently testable and failure-isolated.
+- **Thin FastAPI transport:** routes validate/map HTTP contracts and delegate business behavior.
+  The existing frontend response shapes remain stable.
+- **Lightweight EventBus:** direct awaited dispatch is adequate for optional in-process reactions.
+  It is not wired without a concrete consumer and does not pretend to be durable.
+- **Docker Compose:** one non-root daemon plus a named SQLite volume matches the supported ownership
+  model. Redis, Celery, and a second scheduler are not justified.
 
 1. API health and frontend-to-API proxying.
 2. Explicit demo mode and simulated provider labels.
@@ -62,183 +266,77 @@ containers, and verifies:
 8. API/engine container restart and retained watchlist/event state.
 9. Graceful shutdown and removal of only the isolated smoke-test volume.
 
-Every stage prints `PASS`; any failure returns a nonzero exit status and prints container logs. Use
-`--keep` to retain the isolated stack for inspection. The smoke test never calls a live provider or
-touches the normal application volume.
-
-## Operating modes
-
-| Mode | Setting | Network behavior | Data |
-|---|---|---|---|
-| Offline demo (default) | `CS2_OPERATING_MODE=demo` | No marketplace or remote-catalog calls | Deterministic fixtures, labelled simulated |
-| Public marketplaces | `CS2_OPERATING_MODE=public` | Best-effort requests to explicitly enabled providers | Live observations, never replaced by demo values |
-
-Demo providers are named `demo-market-a` and `demo-market-b`; live providers use their real names.
-The Docker default database is `/var/lib/price-oracle/demo.sqlite3`. Keep public observations in a
-different file so the two modes remain operationally isolated:
-
-```bash
-CS2_OPERATING_MODE=public \
-CS2_DATABASE_PATH=/var/lib/price-oracle/public.sqlite3 \
-docker compose up --build -d
-```
-
-Provider failures remain visible in logs and affect their own jobs. Price Oracle never silently
-falls back from unavailable live data to simulated prices.
-
-## Docker architecture
-
-```mermaid
-flowchart LR
-    Browser[Browser :5173] --> Frontend[Nginx + React]
-    Frontend -->|/api| API[FastAPI :8000]
-    API --> Engine[one MarketEngine]
-    Engine --> Scheduler[JobScheduler]
-    Scheduler --> Workers[bounded JobHandler]
-    Workers --> Collection[CollectionService]
-    Collection --> Registry[MarketplaceRegistry]
-    Registry --> Demo[demo adapters]
-    Registry --> Public[optional public adapters]
-    Workers --> Storage[(SQLite named volume)]
-    Storage --> API
-    Engine --> Alerts[AlertService]
-    Alerts --> Notifications[simulated or optional Discord]
-```
-
-FastAPI owns exactly one in-process engine and scheduler. Uvicorn is fixed to one worker; do not
-scale the API service horizontally against this SQLite volume. The frontend container only serves
-static assets and proxies `/api`.
-
-## End-to-end data flow
-
-```mermaid
-sequenceDiagram
-    participant W as WatchlistService
-    participant S as JobScheduler
-    participant H as JobHandler
-    participant C as CollectionService
-    participant M as MarketplaceRegistry / provider
-    participant DB as SQLite StorageService
-    participant A as AlertService
-    participant N as NotificationService
-    participant UI as FastAPI / React
-
-    W->>DB: persist watchlist
-    W->>S: register recurring exact-item fetch
-    S->>H: submit FetchMarketJob
-    H->>C: collect(provider, Item)
-    C->>M: bounded/retried fetch
-    M-->>C: normalized MarketQuote
-    C-->>H: quote batch
-    H->>DB: atomic append
-    H->>A: evaluate committed lowest ask
-    A->>DB: atomic state transition + event
-    A->>N: durable event
-    N->>DB: durable simulated/Discord outcome
-    UI->>DB: history, comparisons, watchlists, events
-```
-
-## Public provider assessment
-
-No live request was made while validating this change. Provider contract tests use saved
-representative payloads and `httpx.MockTransport`.
-
-| Provider / endpoint | Authentication and cost | Limits and caching | Data and limitations | V1 recommendation |
-|---|---|---|---|---|
-| Steam Community Market `GET /market/priceoverview/` ([official Web API overview](https://partner.steamgames.com/doc/webapi_overview)) | No key observed; this community endpoint is outside the formally documented Steam Web API market-price interface | No official rate limit; adapter uses one connection, 60-second item cache, 2-second request spacing, timeout, and bounded retry | Exact `appid=730` item; lowest ask, optional median and volume. Wallet prices are not withdrawable cash. Access may return 403/429/HTML. | Implemented as best-effort public mode; never mandatory |
-| [Skinport `GET /v1/items`](https://docs.skinport.com/items) | Officially no authorization; public/free access | 8 requests per 5 minutes, response cached 5 minutes, `Accept-Encoding: br` required | One catalog response covers many exact names; min/mean/median/max/suggested prices and quantity. Aggregate minimum is not a guaranteed executable transaction. | Best documented keyless V1 source; implemented |
-| [Skinport `GET /v1/sales/history`](https://docs.skinport.com/sales/history) | Officially no authorization; public/free access | 8 requests per 5 minutes, cached 5 minutes, Brotli required | 24h/7d/30d/90d sale aggregates and volume; these are historical statistics, not live asks. | Recommended later; not implemented in this change |
-| [CSFloat `GET /api/v1/listings`](https://docs.csfloat.com/) | Official examples show listing reads without a key; account/write operations require an API key | No dependable anonymous limit is published; use conservative spacing and caching | Exact active buy-now listings in integer minor units; listing-level `INDIVIDUAL_LISTING`, not aggregate lowest ask | Implemented as an optional keyless provider; key can enhance access |
-
-Steam request parameters are `appid=730`, the exact `market_hash_name`, configured country, and
-Steam currency ID. Names are sent without canonicalization, so wear, StatTrak™, Souvenir, and other
-variants never merge. The adapter safely parses common dot/comma localized formats into `Decimal`,
-keeps configured currency explicit, distinguishes lowest ask from the separately retained median,
-and preserves optional volume. HTTP 429, 403/5xx, timeout, invalid JSON, `success=false`, and missing
-price fields remain distinct failures or unavailable data; missing values are not invented.
-
-## Configuration and optional credentials
-
-The application runs without copying `.env.example`. All settings use the `CS2_` prefix; see the
-Docker-oriented [`.env.example`](.env.example) and local-Python
-[`backend/.env.example`](backend/.env.example) templates.
-
-| Variable | Default in Compose | Required? | Purpose |
-|---|---:|---|---|
-| `CS2_OPERATING_MODE` | `demo` | No | `demo` or `public` |
-| `CS2_DATABASE_PATH` | `/var/lib/price-oracle/demo.sqlite3` | No | SQLite file inside the persistent volume |
-| `CS2_DEMO_SEED_ENABLED` | `true` | No | Idempotent sample watchlist/alert |
-| `CS2_STEAM_ENABLED` | `true` | No | Enable Steam only in public mode |
-| `CS2_SKINPORT_ENABLED` | `true` | No | Enable Skinport only in public mode |
-| `CS2_CSFLOAT_ENABLED` | `true` | No | Enable CSFloat only in public mode |
-| `CS2_CSFLOAT_API_KEY` | unset | No | Optional CSFloat authorization |
-| `CS2_DISCORD_WEBHOOK_URL` | unset | No | Optional public-mode Discord delivery |
-| `CS2_WORKER_COUNT` | `2` | No | Bounded collection workers |
-| `CS2_JOB_QUEUE_CAPACITY` | `100` | No | Pending job bound |
-
-Missing credentials never create empty authorization headers. An invalid optional CSFloat setting
-disables CSFloat, and an invalid Discord destination disables Discord without preventing the
-remaining application from starting. Actual authentication rejection is reported for that provider.
-Secrets are represented with Pydantic `SecretStr` and are never returned by APIs or logged.
-
-For optional Docker Secrets, copy [`compose.secrets.yaml.example`](compose.secrets.yaml.example),
-create only the files you need under the ignored `secrets/` directory, then run:
-
-```bash
-docker compose -f compose.yaml -f compose.secrets.yaml up --build -d
-```
-
-The base Compose file has no secret mounts, so nonexistent secret files cannot block keyless startup.
-
-## API and frontend
-
-The React page uses the engine-backed API through Nginx's same-origin proxy. Important routes:
-
-- `GET /api/health` and `GET /api/status`
-- `GET /api/items/search?q=redline`
-- `GET /api/items/{market_hash_name}/quotes`
-- `GET /api/items/{market_hash_name}/history`
-- `GET /api/items/{market_hash_name}/comparison`
-- watchlist CRUD under `/api/watchlists`
-- alert rules/events under `/api/alerts` and `/api/alerts/events`
-- `GET /api/notifications/{event_id}`
-
-OpenAPI documentation is available at <http://127.0.0.1:8000/docs>.
-
-The legacy two-provider `/api/prices/compare` contract remains available in public mode when both
-Steam and Skinport are enabled. The dashboard uses stored engine observations instead, so its values
-have passed through collection and persistence rather than bypassing the engine.
-
-## Source map
-
-| File | Responsibility |
-|---|---|
-| [`compose.yaml`](compose.yaml) | Keyless API/frontend deployment, health checks, persistent volume |
-| [`Dockerfile`](Dockerfile) | Non-root single-worker API image |
-| [`frontend/Dockerfile`](frontend/Dockerfile) | Reproducible React build and Nginx runtime |
-| [`backend/engine/config/settings.py`](backend/engine/config/settings.py) | Typed environment/dotenv/Docker Secret settings |
-| [`backend/engine/bootstrap.py`](backend/engine/bootstrap.py) | One explicit composition root and provider selection |
-| [`backend/engine/demo.py`](backend/engine/demo.py) | Network-free catalog, providers, and seed configuration |
-| [`backend/engine/marketplaces/steam.py`](backend/engine/marketplaces/steam.py) | Steam request, cache, failure mapping, localized normalization |
-| [`backend/engine/marketplaces/skinport.py`](backend/engine/marketplaces/skinport.py) | Cached Skinport catalog adapter |
-| [`backend/engine/marketplaces/csfloat.py`](backend/engine/marketplaces/csfloat.py) | Optional listing adapter |
-| [`backend/engine/api/routes.py`](backend/engine/api/routes.py) | Engine-backed management and observation API |
-| [`scripts/smoke_test.py`](scripts/smoke_test.py) | Isolated full-Compose practical test |
-
-## Local development and tests
-
-Python 3.12+ and Node.js 20+ are supported.
+Requirements: Python 3.12+, Node.js 20+, and optionally Docker with Compose.
 
 ```bash
 cd backend
-python3 -m venv .venv
-. .venv/bin/activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
-python -m pytest -q
+cp .env.example .env
+
+# API plus one engine (needed by the frontend)
+python -m uvicorn app.main:app --reload --port 8000 --workers 1
+```
+
+In another terminal:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Open `http://localhost:5173`. Vite proxies `/api` to `127.0.0.1:8000`.
+
+For the engine-only daemon, stop the API if it uses the same database, then run:
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m engine
+```
+
+Configuration uses `CS2_` environment variables, `backend/.env`, or prefixed Docker Secret
+filenames. See [`backend/.env.example`](backend/.env.example) and the
+[configuration guide](backend/engine/config/README.md). Logs go to stdout/stderr. For storage
+errors, verify parent-directory permissions and that no second scheduler process owns the database.
+
+## Docker deployment
+
+Compose runs only the daemon and persists `/data/engine.sqlite3` in `price-oracle-data`:
+
+```bash
+cp backend/.env.example backend/.env
+docker compose config
+docker compose build
+docker compose up -d
+docker compose logs -f price-oracle-engine
+docker compose stop
+```
+
+The image runs as the unprivileged `price-oracle` user. `init: true` handles child reaping,
+`stop_grace_period: 20s` permits the configured job drain, and normal `docker compose down`
+preserves the volume. `docker compose down --volumes` deletes the database.
+
+For Docker Secrets, copy [`compose.secrets.yaml.example`](compose.secrets.yaml.example), create only
+the referenced ignored secret files, and run both Compose files. Credentials are neither copied
+into the image nor stored in notification rows. See the [deployment guide](docs/deployment/README.md).
+
+Operational limitations: no health endpoint is exposed by the daemon container, no API/frontend is
+served, one replica is supported, and database upgrades have no migration framework.
+
+## Testing and verified results
+
+```bash
+cd backend
+.venv/bin/python -m pytest -q
+.venv/bin/python -m compileall -q app engine tests
 
 cd ../frontend
 npm ci
 npm run build
+npm audit --audit-level=low
 
 cd ..
 docker compose config
@@ -246,36 +344,65 @@ docker compose build
 python3 scripts/smoke_test.py --mode demo
 ```
 
-Validation performed on 2026-10-24:
+Audit results on 2026-10-22:
 
-- Backend: **411 passed** (provider calls mocked; one third-party TestClient deprecation warning).
-- Frontend TypeScript and Vite production build: passed; `npm ci` reported 0 vulnerabilities.
-- `docker compose config`: passed.
-- API and frontend images: built successfully.
-- Isolated live Compose smoke test: every stage passed, including restart persistence and cleanup.
-- Live Steam, Skinport, CSFloat, and Discord requests: deliberately not run.
+- Backend: **406 passed**, no failures/skips; one upstream FastAPI/Starlette `TestClient` warning.
+- Python syntax/import validation: passed.
+- Frontend strict TypeScript and Vite production build: passed; no frontend source changed.
+- `npm audit`: zero known vulnerabilities.
+- `pip-audit` against the isolated installed environment: no known vulnerabilities.
+- Base and Docker-Secrets Compose configuration: passed.
+- Image build: passed.
+- Container smoke: non-root startup, SQLite creation/persistence across restart, and clean SIGTERM
+  shutdown passed with external collection disabled.
 
-The in-memory [`EventBus`](backend/engine/events/bus.py) retains its isolated tested contract but is
-not inserted into the durable quote/alert pipeline; that pipeline uses the existing post-persist
-hook. No claim of durable EventBus dispatch is made.
+Tests use temporary SQLite databases, fake marketplaces, and mocked HTTP/Discord transports. The
+critical test covers collection → quote commit → alert evaluation → durable event → mocked Discord
+delivery → durable delivery result, including restart rearming. No test contacted Steam, Skinport,
+CSFloat, Discord, or the catalog. There is no configured Python linter or static type checker.
 
-## Troubleshooting and limitations
+## Extending the project
 
-- Check `docker compose ps` and `docker compose logs --tail=200 api frontend` first.
-- A 403/429 or HTML response from Steam means the undocumented public endpoint is restricted; it is
-  not evidence that an API key is missing.
-- Skinport 406 usually means Brotli negotiation failed; the runtime includes Brotli and sends the
-  required header.
-- Public providers can be temporarily unavailable. Other scheduled providers continue running.
-- The project does not convert currencies, invent fees, equate Steam Wallet and cash value, place
-  trades, or present fictional prices as recommendations.
-- SQLite is for one self-hosted node. There is no migration framework, authentication/multi-user
-  boundary, notification recovery worker, browser automation test, or guaranteed live-provider SLA.
-- The browser production bundle and API proxy were exercised by HTTP; automated visual browser
-  interaction is not currently configured.
+- **Marketplace:** implement the `Marketplace` protocol, normalize exact `MarketQuote` semantics,
+  map provider errors, register it in bootstrap, and add mocked contract tests.
+- **Engine job:** subclass `EngineJob`, choose a stable collision key, implement one execution, and
+  submit it through `JobHandler`; keep recurrence in `JobScheduler`.
+- **Storage operation:** add private ORM mapping only when needed, expose a typed
+  `StorageService` method, and define the transaction/upgrade implications.
+- **API endpoint:** add transport schemas and a thin route that delegates to an engine service;
+  preserve decimal and timestamp representations and add contract tests.
+- **Event:** add an immutable `EngineEvent`, subscribe on an injected bus, and publish only after
+  durable state commits. Decide explicitly whether subscriber failure should fail the caller.
+- **Alert condition:** update enum, validation, storage constraints, transition logic, API schemas,
+  and equality/rearming tests together.
+- **Notification destination:** define credential validation, HTTP ownership, retry categories,
+  durable outcome fields, secret-safe logs, and channel-specific tests.
 
-See [`docs/deployment/README.md`](docs/deployment/README.md) for deployment details and module-level
-READMEs under [`backend/engine`](backend/engine/README.md) for service contracts.
+## Legacy and unused code
+
+The following code is retained for review; it is not on the active application path:
+
+| Path | Previous responsibility | Active replacement | Evidence / removal status |
+|---|---|---|---|
+| `backend/app/api`, `adapters`, `domain`, `ports`, `services` | Original comparison backend | `backend/engine/api`, `catalog`, `marketplaces`, `services` | `app/main.py` imports only `engine.api`; retain until live compatibility smoke testing |
+| [`Dockerfile`](Dockerfile) and `backend/requirements-runtime.txt` | Earlier engine-only image/runtime | [`backend/Dockerfile`](backend/Dockerfile) and `backend/requirements-engine.txt` | Not referenced by Compose; safe-removal candidate after deployment review |
+| [`backend/engine/engine.py`](backend/engine/engine.py) | `OracleEngine` placeholder import | `MarketEngine` | Compatibility alias; retain while external imports are unknown |
+
+No legacy files were deleted in this audit.
+
+## Remaining limitations
+
+- External marketplace behavior and rate limits have not been validated with authorized live calls.
+- Steam Community Market `priceoverview` is not a formally documented public Web API; its contract
+  can change or be rate-limited.
+- CSFloat listing observations cannot trigger lowest-ask alerts.
+- The API has no user authentication/authorization, and the frontend exposes only comparison.
+- Notification failures/pending claims have no recovery worker or operator interface.
+- EventBus is in-memory, unwired, non-durable, and not exactly-once.
+- SQLite schema creation uses `create_all`; existing deployments have no automated migrations.
+- Python dependencies use compatible ranges rather than a lockfile.
+- Frontend has no automated component/browser test suite; its current automated gate is strict
+  TypeScript compilation plus production bundling.
 
 ## License
 

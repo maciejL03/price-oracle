@@ -132,6 +132,33 @@ Unknown shapes are rejected. Item identity is compared exactly so normal, StatTr
 wear variants remain separate. Prices are converted from integer minor units to `Decimal` major
 units. The quote timestamp is the UTC response-observation time, not the listing creation time.
 
+### `SteamMarketplace`
+
+`SteamMarketplace.fetch_snapshot()` calls the Community Market `priceoverview` endpoint with the
+configured country, numeric currency code, app ID, exact market hash name, browser-style user agent,
+and request timeout. It parses `lowest_price`, optional `median_price`, and optional volume. Money
+is converted directly to `Decimal`; the generic quote is a `LOWEST_ASK` in the explicitly configured
+currency. `fetch()` returns that quote for scheduled collection, while the snapshot method retains
+the extra fields needed by the frontend.
+
+Timeout, request, HTTP-status, missing-data, JSON, and parsing failures become provider-neutral
+marketplace errors. The `priceoverview` route is not part of Valve's formally documented public Web
+API, so mocked compatibility tests do not establish a production support guarantee.
+
+### `SkinportMarketplace`
+
+`SkinportMarketplace` calls `GET /v1/items` with `app_id`, currency, and `tradable=1`, requesting
+Brotli responses as shown by Skinport's public documentation. The runtime image therefore includes
+the `brotli` decoder. The returned index is cached on disk and in memory for the configured TTL;
+one async lock prevents duplicate refreshes, file work runs in a worker thread, and a truncated
+JSON cache is treated as a cache miss and replaced from the provider.
+
+Entries with no positive `min_price` are unavailable and omitted. Valid entries become
+`LOWEST_ASK` quotes plus a `SkinportSnapshot` containing optional median, mean, maximum, suggested
+price, quantity, and page URLs for the frontend. Timeouts, request/HTTP failures, and invalid remote
+JSON are normalized to marketplace errors. A caller-injected HTTP client remains caller-owned;
+otherwise the engine closes the adapter's client during shutdown.
+
 ## Error handling
 
 | Condition | Exception | Retry classification |

@@ -1,57 +1,18 @@
 services:
-  api:
+  price-oracle-engine:
     build:
       context: .
-      dockerfile: Dockerfile
-    environment:
-      CS2_OPERATING_MODE: ${CS2_OPERATING_MODE:-demo}
-      CS2_DEMO_SEED_ENABLED: ${CS2_DEMO_SEED_ENABLED:-true}
-      CS2_DATABASE_PATH: ${CS2_DATABASE_PATH:-/var/lib/price-oracle/demo.sqlite3}
-      CS2_CACHE_DIR: /var/lib/price-oracle/cache
-      CS2_WORKER_COUNT: ${CS2_WORKER_COUNT:-2}
-      CS2_JOB_QUEUE_CAPACITY: ${CS2_JOB_QUEUE_CAPACITY:-100}
-      CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS: ${CS2_JOB_SHUTDOWN_TIMEOUT_SECONDS:-10.0}
-      CS2_DATABASE_BUSY_TIMEOUT_SECONDS: ${CS2_DATABASE_BUSY_TIMEOUT_SECONDS:-5.0}
-      CS2_SCHEDULER_POLL_SECONDS: ${CS2_SCHEDULER_POLL_SECONDS:-0.1}
-      CS2_QUOTE_MAX_AGE_SECONDS: ${CS2_QUOTE_MAX_AGE_SECONDS:-300.0}
-      CS2_STEAM_ENABLED: ${CS2_STEAM_ENABLED:-true}
-      CS2_SKINPORT_ENABLED: ${CS2_SKINPORT_ENABLED:-true}
-      CS2_CSFLOAT_ENABLED: ${CS2_CSFLOAT_ENABLED:-true}
+      dockerfile: backend/Dockerfile
     init: true
     restart: unless-stopped
     stop_grace_period: 20s
-    ports:
-      - "127.0.0.1:${CS2_API_PORT:-8000}:8000"
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      CS2_DATABASE_PATH: /data/engine.sqlite3
     volumes:
-      - price-oracle-data:/var/lib/price-oracle
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    depends_on:
-      api:
-        condition: service_healthy
-    init: true
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${CS2_FRONTEND_PORT:-5173}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
+      - price-oracle-data:/data
 
 volumes:
   price-oracle-data:
