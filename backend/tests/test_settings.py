@@ -103,6 +103,8 @@ def test_settings_dump_contains_only_validated_values() -> None:
 
     assert settings.model_dump() == {
         "worker_count": 2,
+        "operating_mode": "demo",
+        "demo_seed_enabled": True,
         "job_queue_capacity": 12,
         "job_shutdown_timeout_seconds": 1.5,
         "database_path": Path("state/quotes.sqlite3"),
@@ -119,10 +121,13 @@ def test_settings_dump_contains_only_validated_values() -> None:
             "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/all.json"
         ),
         "catalog_cache_ttl_seconds": 86400.0,
+        "steam_enabled": True,
         "steam_country": "GB",
         "steam_currency_code": 2,
         "steam_currency": "GBP",
         "steam_app_id": 730,
+        "steam_cache_ttl_seconds": 60.0,
+        "skinport_enabled": True,
         "skinport_currency": "GBP",
         "skinport_base_url": "https://api.skinport.com/v1",
         "skinport_cache_ttl_seconds": 300.0,
@@ -173,6 +178,17 @@ def test_invalid_csfloat_currency_is_rejected(currency: str) -> None:
         )
 
     assert error.value.errors()[0]["loc"] == ("csfloat_currency",)
+
+
+def test_skinport_cache_cannot_be_more_aggressive_than_documented() -> None:
+    with pytest.raises(ValidationError) as error:
+        EngineSettings(
+            _env_file=None,
+            _secrets_dir=None,
+            skinport_cache_ttl_seconds=299,
+        )
+
+    assert error.value.errors()[0]["loc"] == ("skinport_cache_ttl_seconds",)
 
 
 @pytest.mark.asyncio

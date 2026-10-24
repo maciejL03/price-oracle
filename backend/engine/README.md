@@ -82,14 +82,15 @@ async with engine:
     ...
 ```
 
-`create_market_engine()` performs no database I/O and starts no tasks. By default it constructs
-the catalog plus Steam, Skinport, and optionally CSFloat (`CS2_CSFLOAT_ENABLED`). Tests and
+`create_market_engine()` performs no database I/O and starts no tasks. In the default `demo` mode
+it constructs the bundled catalog and two deterministic demo providers. In explicit `public` mode
+it constructs the remote catalog plus enabled Steam, Skinport, and CSFloat providers. Tests and
 self-hosted extensions can inject an iterable of marketplace implementations; injected marketplace
 resources are transferred to the engine and closed at shutdown.
 
-`NotificationService` is constructed only when `CS2_DISCORD_WEBHOOK_URL` is configured. Without a
-webhook, alert events remain durable but no external delivery is attempted. A supplied notification
-HTTP client is also transferred to the engine and closed during shutdown.
+Demo mode uses `SimulatedNotificationService`, which records a durable success without network I/O.
+Public mode constructs `NotificationService` only for a valid `CS2_DISCORD_WEBHOOK_URL`; otherwise
+alert events remain durable and no external delivery is attempted.
 
 For a standalone process, run from `backend/`:
 
@@ -257,7 +258,7 @@ container termination.
 ## Known limitations
 
 - CSFloat data is currently individual-listing data and therefore does not drive lowest-ask alerts.
-- Discord is the only notification channel, and absent credentials intentionally disable delivery.
+- Public-mode external delivery supports Discord; demo mode records simulated delivery.
 - Notification retries are bounded and inline. There is no recovery lease for a delivery left
   `pending` by process termination.
 - There is no durable event-dispatch worker. An alert event committed immediately before a process

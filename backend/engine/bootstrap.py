@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
@@ -10,6 +11,12 @@ import httpx
 from engine.alerts import AlertService
 from engine.catalog import ByMykelItemCatalog
 from engine.config import EngineSettings
+from engine.demo import (
+    DemoItemCatalog,
+    create_demo_marketplaces,
+    seed_demo_configuration,
+)
+from engine.errors import NotificationConfigurationError
 from engine.jobs import FetchMarketJob, JobHandler, JobScheduler
 from engine.market_engine import AsyncCloser, MarketEngine
 from engine.marketplaces import (
@@ -29,6 +36,8 @@ from engine.services import (
 from engine.storage import StorageService
 from engine.watchlists import WatchlistService
 
+logger = logging.getLogger(__name__)
+
 
 def create_market_engine(
     settings: EngineSettings | None = None,
@@ -42,6 +51,7 @@ def create_market_engine(
     returned engine, which closes them during shutdown.
     """
     actual_settings = settings or EngineSettings()
+    using_configured_marketplaces = marketplaces is None
     storage = StorageService(
         actual_settings.database_path,
         busy_timeout_seconds=actual_settings.database_busy_timeout_seconds,
@@ -49,19 +59,41 @@ def create_market_engine(
 
     owned_closers: list[AsyncCloser] = []
     providers: tuple[Marketplace, ...]
-    catalog: ByMykelItemCatalog | None = None
+    catalog: ByMykelItemCatalog | DemoItemCatalog | None = None
     comparisons: MarketplaceComparisonService | None = None
+    initialize_data = None
+    steam: SteamMarketplace | None = None
+    skinport: SkinportMarketplace | None = None
     if marketplaces is None:
         configured: list[Marketplace] = []
-        if actual_settings.csfloat_enabled:
-            csfloat = CSFloatMarketplace(
-                currency=actual_settings.csfloat_currency,
-                api_key=(
-                    None
-                    if actual_settings.csfloat_api_key is None
-                    else actual_settings.csfloat_api_key.get_secret_value()
-                ),
-                timeout=actual_settings.csfloat_timeout_seconds,
+        if actual_settings.operating_mode == "demo":
+            configured.extend(create_demo_marketplaces())
+            catalog = DemoItemCatalog()
+            if actual_settings.demo_seed_enabled:
+                initialize_data = lambda: seed_demo_configuration(storage)
+        else:
+            if actual_settings.csfloat_enabled:
+                try:
+                    configured.append(
+                        CSFloatMarketplace(
+                            currency=actual_settings.csfloat_currency,
+                            api_key=(
+                                None
+                                if actual_settings.csfloat_api_key is None
+                                else actual_settings.csfloat_api_key.get_secret_value()
+                            ),
+                            timeout=actual_settings.csfloat_timeout_seconds,
+                        )
+                    )
+                except ValueError:
+                    logger.warning(
+                        "CSFloat is disabled because its optional configuration is invalid"
+                    )
+            catalog = ByMykelItemCatalog(
+                url=actual_settings.catalog_url,
+                cache_path=actual_settings.cache_dir / "bymykel_items.json",
+                cache_ttl_seconds=actual_settings.catalog_cache_ttl_seconds,
+                timeout_seconds=actual_settings.http_timeout_seconds,
             )
             configured.append(csfloat)
         catalog = ByMykelItemCatalog(
@@ -104,10 +136,23 @@ def create_market_engine(
         if callable(closer):
             owned_closers.append(closer)
 
-    collection = CollectionService(registry)
+    policies = {
+        "steam": CollectionPolicy(
+            max_concurrency=1,
+            minimum_interval_seconds=2.0,
+            max_attempts=2,
+        ),
+        "skinport": CollectionPolicy(max_concurrency=1, max_attempts=2),
+        "csfloat": CollectionPolicy(
+            max_concurrency=1,
+            minimum_interval_seconds=1.0,
+            max_attempts=2,
+        ),
+    }
+    collection = CollectionService(registry, policies=policies)
     max_quote_age = timedelta(seconds=actual_settings.quote_max_age_seconds)
     pricing = PricingService(max_quote_age=max_quote_age)
-    if catalog is not None:
+    if catalog is not None and steam is not None and skinport is not None:
         comparisons = MarketplaceComparisonService(
             catalog,
             steam,
@@ -117,17 +162,24 @@ def create_market_engine(
         )
     alerts = AlertService(storage, max_quote_age=max_quote_age)
 
-    notifications: NotificationService | None = None
-    if actual_settings.discord_webhook_url is not None:
-        http_client = notification_http_client
-        if http_client is None:
-            http_client = httpx.AsyncClient()
-        owned_closers.append(http_client.aclose)
-        notifications = NotificationService(
-            storage,
-            http_client,
-            discord_webhook_url=actual_settings.discord_webhook_url,
-        )
+    notifications: NotificationService | SimulatedNotificationService | None = None
+    if actual_settings.operating_mode == "demo" and using_configured_marketplaces:
+        notifications = SimulatedNotificationService(storage)
+    elif actual_settings.discord_webhook_url is not None:
+        try:
+            validate_discord_webhook_url(actual_settings.discord_webhook_url)
+        except NotificationConfigurationError as error:
+            logger.warning("Discord notifications are disabled: %s", error)
+        else:
+            http_client = notification_http_client
+            if http_client is None:
+                http_client = httpx.AsyncClient()
+            owned_closers.append(http_client.aclose)
+            notifications = NotificationService(
+                storage,
+                http_client,
+                discord_webhook_url=actual_settings.discord_webhook_url,
+            )
 
     async def process_persisted_quotes(quotes: tuple[MarketQuote, ...]) -> None:
         for observation in quotes:
@@ -176,6 +228,13 @@ def create_market_engine(
         owned_resource_closers=owned_closers,
         catalog=catalog,
         comparisons=comparisons,
+        operating_mode=actual_settings.operating_mode,
+        simulated_marketplaces=(
+            registry.names
+            if actual_settings.operating_mode == "demo" and using_configured_marketplaces
+            else ()
+        ),
+        initialize_data=initialize_data,
     )
 
 

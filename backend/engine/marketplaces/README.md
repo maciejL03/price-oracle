@@ -1,11 +1,12 @@
 # Marketplace system
 
 The marketplace package defines the shared provider contract and registry, and contains concrete
-CSFloat, Steam, and Skinport adapters. Providers fetch external data and normalize it into the shared
+demo, CSFloat, Steam, and Skinport adapters. Public providers fetch external data and normalize it into the shared
 [`MarketQuote`](../models/quote.py) model. Scheduling, retries, persistence, currency conversion,
 and pricing decisions remain outside this package.
 
-CSFloat provides individual listings. Steam and Skinport provide aggregate lowest-ask snapshots for
+Demo providers return explicitly simulated lowest asks without I/O. CSFloat provides individual
+listings. Steam and Skinport provide aggregate lowest-ask snapshots for
 the retained website comparison contract; their extra aggregate fields are kept in their provider
 snapshot types rather than added to the generic `MarketQuote` model.
 
@@ -15,7 +16,7 @@ snapshot types rather than added to the generic `MarketQuote` model.
 flowchart LR
     Caller[CollectionService or caller] --> Registry[MarketplaceRegistry]
     Registry --> Contract[Marketplace protocol]
-    Contract --> Providers[CSFloat / Steam / Skinport]
+    Contract --> Providers[Demo / CSFloat / Steam / Skinport]
     Providers --> Client[reused httpx.AsyncClient]
     Client --> API[Marketplace APIs]
     API --> Providers
@@ -212,3 +213,4 @@ Do not add scheduling, persistence, currency conversion, or pricing comparisons 
 - The CSFloat integration is validated with mocked responses and makes no live-operability claim.
 - Steam and Skinport compatibility providers are also validated only with mocked responses; they
   require production smoke testing and are not a substitute for official provider support.
+- Steam's `priceoverview` route is undocumented and best-effort even though it needs no key.

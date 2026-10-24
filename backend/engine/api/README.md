@@ -1,7 +1,8 @@
 # Engine API
 
 `engine.api` is the single HTTP transport layer for the self-hosted Price Oracle engine. It keeps
-the existing website's two public contracts stable while delegating validation, collection,
+the earlier comparison contracts while exposing the stored engine workflow used by the dashboard,
+delegating validation, collection,
 persistence, comparisons, watchlists, alerts, and delivery-state reads to engine services. Route
 handlers do not query SQL, schedule jobs, normalize marketplace payloads, or deliver notifications.
 
@@ -71,7 +72,7 @@ sequenceDiagram
 | Method and path | Request | Response | Engine source |
 |---|---|---|---|
 | `GET /api/health` | none | `{"status":"ok"}` | `MarketEngine.running` |
-| `GET /api/items/search` | `q` (1–120 chars), `limit` (1–50; default 20) | `{"items":[{"market_hash_name","name","image"}]}` | `MarketplaceComparisonService.search()` → `ByMykelItemCatalog` |
+| `GET /api/items/search` | `q` (1–120 chars), `limit` (1–50; default 20) | `{"items":[{"market_hash_name","name","image"}]}` | Active demo or public `ItemCatalog` |
 | `GET /api/prices/compare` | `market_hash_name` (1–200 chars) | Existing Steam/Skinport comparison shape | `MarketplaceComparisonService.compare()` → providers + `PricingService` |
 
 The comparison response retains the existing numeric JSON fields, names, nullability, and
@@ -88,7 +89,9 @@ failures become `502` with a safe message. FastAPI validates malformed query val
 
 | Method and path | Contract / service |
 |---|---|
+| `GET /api/status` | Operating mode, data kind, providers, and notification mode |
 | `GET /api/marketplaces` | Registered marketplace names from `MarketplaceRegistry` |
+| `GET /api/items/{market_hash_name}/comparison` | `PricingService` comparison of latest persisted compatible quotes |
 | `GET /api/items/{market_hash_name}/quotes` | Latest stored series; optional `marketplace`, `currency`, `quote_type` |
 | `GET /api/items/{market_hash_name}/history` | Chronological stored observations; optional quote filters, aware `observed_from`/`observed_to`, `limit` ≤ 10,000 |
 | `POST`, `GET /api/watchlists` | Create/list `WatchlistService` watchlists |
@@ -96,6 +99,7 @@ failures become `502` with a safe message. FastAPI validates malformed query val
 | `PUT /api/watchlists/{id}/items` | Add/merge an item and its marketplace set |
 | `DELETE /api/watchlists/{id}/items/{market_hash_name}` | Remove an item association |
 | `POST`, `GET /api/alerts` | Create/list threshold rules through `AlertService` |
+| `GET /api/alerts/events` | Durable edge-triggered alert events |
 | `DELETE /api/alerts/{id}` | Delete an alert rule |
 | `GET /api/notifications/{event_id}` | Durable `NotificationDelivery` state from `StorageService` |
 
@@ -117,7 +121,8 @@ lowest asks can drive those rules through scheduled watchlist collection.
 
 ## Marketplace migration
 
-The engine now owns the catalog and providers needed for the existing frontend:
+The engine owns the catalogs and providers needed by the frontend. Demo mode uses bundled data;
+public mode uses:
 
 - [`../catalog.py`](../catalog.py): ByMykel catalog cache, canonical item resolution, and the
   legacy exact/prefix/contains ordering.
@@ -128,8 +133,8 @@ The engine now owns the catalog and providers needed for the existing frontend:
 
 These sources use shared long-lived `httpx.AsyncClient` instances and close them through the
 `MarketEngine` lifecycle. File-cache work is sent to a worker thread so route requests do not block
-the event loop. Steam and Skinport are registered alongside CSFloat when the default engine is
-bootstrapped; they produce `LOWEST_ASK` quotes, whereas CSFloat retains its
+the event loop. Steam and Skinport are registered alongside enabled CSFloat in public mode; they
+produce `LOWEST_ASK` quotes, whereas CSFloat retains its
 `INDIVIDUAL_LISTING` semantics.
 
 The legacy `app.adapters`, `app.services`, `app.domain`, and `app.api` modules remain on disk but
@@ -166,7 +171,7 @@ python -m pytest -q
 
 Audit result: **406 passed, 1 warning** in the complete backend suite. The warning is FastAPI's
 upstream deprecation notice for Starlette `TestClient`/`httpx`; it does not affect API behavior.
-The frontend TypeScript/Vite build also completed successfully without frontend source changes.
+The frontend TypeScript/Vite build and Docker API proxy smoke test also completed successfully.
 
 No live marketplace credentials or production requests were used in tests. A production smoke test
-is still required for Steam, Skinport, catalog availability, and deployment CORS settings.
+is still required before claiming Steam or Skinport operational availability.

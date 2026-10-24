@@ -44,3 +44,49 @@ export interface ComparisonResult {
 export interface ApiError {
   detail: string;
 }
+
+export interface SystemStatus {
+  status: string;
+  operating_mode: "demo" | "public";
+  data_kind: "simulated" | "live";
+  marketplaces: string[];
+  notifications: "simulated" | "discord" | "disabled";
+}
+
+export interface EngineQuote {
+  marketplace: string;
+  market_hash_name: string;
+  price: string;
+  currency: string;
+  observed_at: string;
+  quote_type: string;
+  external_listing_id: string | null;
+}
+
+export interface StoredComparison {
+  market_hash_name: string;
+  currency: string;
+  quote_type: string;
+  simulated: boolean;
+  quotes: EngineQuote[];
+  lowest_price: string | null;
+  highest_price: string | null;
+  spread: string | null;
+  excluded_count: number;
+}
+
+export interface WatchlistSummary {
+  id: string;
+  name: string;
+  interval_seconds: number;
+  items: Array<{ market_hash_name: string; marketplaces: string[] }>;
+}
+
+export interface AlertEventSummary {
+  id: string;
+  rule_id: string;
+  quote: EngineQuote;
+  condition: string;
+  threshold: string;
+  triggered_at: string;
+}

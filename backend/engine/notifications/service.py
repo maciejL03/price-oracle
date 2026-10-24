@@ -140,7 +140,7 @@ class NotificationService:
         if not isinstance(http_client, httpx.AsyncClient):
             raise TypeError("http_client must be an httpx.AsyncClient")
 
-        _validate_discord_webhook_url(discord_webhook_url)
+        validate_discord_webhook_url(discord_webhook_url)
         self._storage = storage
         self._http_client = http_client
         self._discord_webhook_url = discord_webhook_url
@@ -264,7 +264,55 @@ class NotificationService:
         return value.astimezone(UTC)
 
 
-def _validate_discord_webhook_url(value: SecretStr) -> None:
+class SimulatedNotificationService:
+    """Persist successful demo delivery without contacting an external service."""
+
+    def __init__(self, storage: NotificationStorage, *, _clock: Clock | None = None) -> None:
+        self._storage = storage
+        self._clock = _clock or _utc_now
+
+    async def deliver(self, event: AlertEvent) -> NotificationDelivery:
+        if not isinstance(event, AlertEvent):
+            raise TypeError("event must be an AlertEvent")
+        started_at = self._now()
+        pending = NotificationDelivery(
+            event_id=event.id,
+            channel="demo",
+            status=DeliveryStatus.PENDING,
+            attempts=0,
+            started_at=started_at,
+        )
+        if not await self._storage.claim_notification_delivery(pending):
+            existing = await self._storage.get_notification_delivery(event.id)
+            if existing is None:
+                raise NotificationStateError(
+                    "simulated delivery was claimed but could not be read"
+                )
+            return existing
+
+        result = pending.model_copy(
+            update={
+                "status": DeliveryStatus.SUCCEEDED,
+                "attempts": 1,
+                "completed_at": self._now(),
+            }
+        )
+        await self._storage.complete_notification_delivery(result)
+        logging.getLogger(__name__).info(
+            "Simulated notification delivered: event=%s item=%s",
+            event.id,
+            event.quote.market_hash_name,
+        )
+        return result
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("notification clock must return a timezone-aware datetime")
+        return value.astimezone(UTC)
+
+
+def validate_discord_webhook_url(value: SecretStr) -> None:
     raw_url = value.get_secret_value()
     try:
         parsed = httpx.URL(raw_url)

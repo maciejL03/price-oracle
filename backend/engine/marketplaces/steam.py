@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -10,7 +12,12 @@ from urllib.parse import quote
 
 import httpx
 
-from engine.errors import MarketplaceResponseError, MarketplaceTimeoutError, MarketplaceUnavailableError
+from engine.errors import (
+    MarketplaceRateLimitError,
+    MarketplaceResponseError,
+    MarketplaceTimeoutError,
+    MarketplaceUnavailableError,
+)
 from engine.models import Item, MarketQuote, QuoteType
 
 
@@ -26,7 +33,7 @@ class SteamMarketplace:
     """Fetch Steam's current aggregate price overview for one exact item."""
 
     name = "steam"
-    _PRICE_PATTERN = re.compile(r"[\d,.]+")
+    _PRICE_PATTERN = re.compile(r"\d[\d.,'\u00a0\u202f ]*")
 
     def __init__(
         self,
@@ -37,6 +44,7 @@ class SteamMarketplace:
         app_id: int,
         user_agent: str,
         timeout_seconds: float,
+        cache_ttl_seconds: float = 60.0,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._country = country
@@ -45,13 +53,28 @@ class SteamMarketplace:
         self._app_id = app_id
         self._user_agent = user_agent
         self._timeout_seconds = timeout_seconds
+        self._cache_ttl_seconds = cache_ttl_seconds
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient()
+        self._cache: dict[str, tuple[float, SteamSnapshot]] = {}
+        self._request_lock = asyncio.Lock()
 
     async def fetch(self, item: Item) -> list[MarketQuote]:
         return [(await self.fetch_snapshot(item)).quote]
 
     async def fetch_snapshot(self, item: Item) -> SteamSnapshot:
+        cached = self._cache.get(item.market_hash_name)
+        if cached is not None and time.monotonic() - cached[0] < self._cache_ttl_seconds:
+            return cached[1]
+        async with self._request_lock:
+            cached = self._cache.get(item.market_hash_name)
+            if cached is not None and time.monotonic() - cached[0] < self._cache_ttl_seconds:
+                return cached[1]
+            snapshot = await self._request_snapshot(item)
+            self._cache[item.market_hash_name] = (time.monotonic(), snapshot)
+            return snapshot
+
+    async def _request_snapshot(self, item: Item) -> SteamSnapshot:
         try:
             response = await self._client.get(
                 "https://steamcommunity.com/market/priceoverview/",
@@ -67,20 +90,34 @@ class SteamMarketplace:
                     "Accept-Language": "en-GB,en;q=0.9",
                     "Referer": (
                         "https://steamcommunity.com/market/listings/"
-                        f"{self._app_id}/{quote(item.market_hash_name)}"
+                        f"{self._app_id}/{quote(item.market_hash_name, safe='')}"
                     ),
                 },
                 timeout=self._timeout_seconds,
             )
-            response.raise_for_status()
         except httpx.TimeoutException as error:
             raise MarketplaceTimeoutError("Steam request timed out") from error
-        except httpx.HTTPStatusError as error:
-            raise MarketplaceUnavailableError(
-                f"Steam returned HTTP {error.response.status_code}"
-            ) from error
         except httpx.RequestError as error:
             raise MarketplaceUnavailableError("Steam request failed") from error
+
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            try:
+                retry_after_seconds = None if retry_after is None else float(retry_after)
+            except ValueError:
+                retry_after_seconds = None
+            raise MarketplaceRateLimitError(
+                "Steam rate limit exceeded",
+                retry_after_seconds=retry_after_seconds,
+            )
+        if response.status_code in {403, 503} or response.status_code >= 500:
+            raise MarketplaceUnavailableError(
+                f"Steam returned HTTP {response.status_code}"
+            )
+        if not response.is_success:
+            raise MarketplaceResponseError(
+                f"Steam rejected the request with HTTP {response.status_code}"
+            )
 
         try:
             payload = response.json()
@@ -98,7 +135,10 @@ class SteamMarketplace:
         median = payload.get("median_price")
         volume = payload.get("volume")
         try:
-            parsed_volume = int(volume.replace(",", "")) if isinstance(volume, str) else None
+            volume_digits = (
+                re.sub(r"\D", "", volume) if isinstance(volume, str) else None
+            )
+            parsed_volume = int(volume_digits) if volume_digits else None
             lowest_price = self._parse_price(lowest)
             median_price = self._parse_price(median) if isinstance(median, str) else None
         except ValueError as error:
@@ -123,7 +163,28 @@ class SteamMarketplace:
 
     @classmethod
     def _parse_price(cls, value: str) -> Decimal:
-        match = cls._PRICE_PATTERN.search(value.replace("\xa3", "").replace("£", ""))
+        match = cls._PRICE_PATTERN.search(value)
         if match is None:
             raise ValueError(value)
-        return Decimal(match.group().replace(",", ""))
+        number = (
+            match.group()
+            .replace("\u00a0", "")
+            .replace("\u202f", "")
+            .replace(" ", "")
+            .replace("'", "")
+        )
+        if not number:
+            raise ValueError(value)
+
+        if "." in number and "," in number:
+            decimal_separator = "." if number.rfind(".") > number.rfind(",") else ","
+            grouping_separator = "," if decimal_separator == "." else "."
+            number = number.replace(grouping_separator, "").replace(decimal_separator, ".")
+        elif "," in number or "." in number:
+            separator = "," if "," in number else "."
+            parts = number.split(separator)
+            if len(parts[-1]) in {1, 2}:
+                number = "".join(parts[:-1]) + "." + parts[-1]
+            else:
+                number = "".join(parts)
+        return Decimal(number)

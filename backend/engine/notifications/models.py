@@ -38,7 +38,7 @@ class NotificationDelivery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     event_id: UUID
-    channel: Literal["discord"]
+    channel: Literal["discord", "demo"]
     status: DeliveryStatus
     attempts: int = Field(ge=0)
     started_at: AwareDatetime

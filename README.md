@@ -256,7 +256,15 @@ Pydantic Settings list format.
 - **Docker Compose:** one non-root daemon plus a named SQLite volume matches the supported ownership
   model. Redis, Celery, and a second scheduler are not justified.
 
-## Local development
+1. API health and frontend-to-API proxying.
+2. Explicit demo mode and simulated provider labels.
+3. Persistent sample watchlist restoration.
+4. Scheduler → `JobHandler` → `CollectionService` → demo marketplace execution.
+5. Two normalized lowest asks committed to SQLite.
+6. A real `PricingService` spread calculation.
+7. Durable threshold event creation and simulated notification success.
+8. API/engine container restart and retained watchlist/event state.
+9. Graceful shutdown and removal of only the isolated smoke-test volume.
 
 Requirements: Python 3.12+, Node.js 20+, and optionally Docker with Compose.
 
@@ -333,6 +341,7 @@ npm audit --audit-level=low
 cd ..
 docker compose config
 docker compose build
+python3 scripts/smoke_test.py --mode demo
 ```
 
 Audit results on 2026-10-22:

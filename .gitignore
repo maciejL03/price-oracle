@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+!.env.example
 secrets/
 *.egg-info/
 dist/

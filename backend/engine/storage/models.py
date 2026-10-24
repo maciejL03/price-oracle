@@ -299,7 +299,7 @@ class NotificationDeliveryRecord(Base):
     __tablename__ = "notification_deliveries"
     __table_args__ = (
         CheckConstraint(
-            "channel = 'discord'", name="ck_notification_channel_supported"
+            "channel IN ('discord', 'demo')", name="ck_notification_channel_supported"
         ),
         CheckConstraint(
             "status IN ('pending', 'succeeded', 'failed')",

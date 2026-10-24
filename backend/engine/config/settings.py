@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, StringConstraints
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -37,13 +37,16 @@ class EngineSettings(BaseSettings):
         "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/all.json"
     )
     catalog_cache_ttl_seconds: Annotated[float, Field(gt=0)] = 86_400.0
+    steam_enabled: bool = True
     steam_country: str = "GB"
     steam_currency_code: Annotated[int, Field(gt=0)] = 2
     steam_currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "GBP"
     steam_app_id: Annotated[int, Field(gt=0)] = 730
+    steam_cache_ttl_seconds: Annotated[float, Field(gt=0)] = 60.0
+    skinport_enabled: bool = True
     skinport_currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")] = "GBP"
     skinport_base_url: str = "https://api.skinport.com/v1"
-    skinport_cache_ttl_seconds: Annotated[float, Field(gt=0)] = 300.0
+    skinport_cache_ttl_seconds: Annotated[float, Field(ge=300)] = 300.0
     http_timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -51,3 +54,5 @@ class EngineSettings(BaseSettings):
         "Chrome/120.0.0.0 Safari/537.36"
     )
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    operating_mode: Literal["demo", "public"] = "demo"
+    demo_seed_enabled: bool = True

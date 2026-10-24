@@ -184,7 +184,8 @@ objects.
 
 ## Known limitations
 
-- Discord webhooks are the only V1 channel, with one configured destination per service.
+- Discord is the only external V1 channel. Offline demo mode uses a simulated sender that writes a
+  successful `demo` delivery without making a network request.
 - Bootstrap wires notification delivery after persisted lowest-ask alert evaluation. There is no
   independent event-dispatch worker for replaying older durable events.
 - There is no automatic recovery, lease, operator acknowledgement, dead-letter queue, or dashboard

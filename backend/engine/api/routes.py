@@ -1,6 +1,6 @@
 """Frontend-compatible routes backed by engine services."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -14,7 +14,7 @@ from engine.models import Item, MarketQuote, QuoteType
 from engine.services import ComparisonNotFoundError, MarketplaceComparisonService
 from engine.watchlists import Watchlist, WatchlistNotFoundError
 
-from .dependencies import get_comparisons, get_engine
+from .dependencies import get_catalog, get_comparisons, get_engine
 from .schemas import (
     AlertRuleCollectionResponse,
     AlertRuleCreateRequest,
@@ -46,11 +46,27 @@ async def health(engine: MarketEngine = Depends(get_engine)) -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/status", response_model=SystemStatusResponse)
+async def status(engine: MarketEngine = Depends(get_engine)) -> SystemStatusResponse:
+    mode = engine.operating_mode
+    return SystemStatusResponse(
+        status="ok" if engine.running else "unavailable",
+        operating_mode=mode,
+        data_kind="simulated" if mode == "demo" else "live",
+        marketplaces=list(engine.registry.names),
+        notifications=(
+            "simulated"
+            if mode == "demo"
+            else "discord" if engine.notifications is not None else "disabled"
+        ),
+    )
+
+
 @router.get("/items/search", response_model=SearchResponse)
 async def search_items(
     q: str = Query(min_length=1, max_length=120, description="Partial item name"),
     limit: int = Query(default=20, ge=1, le=50),
-    comparisons: MarketplaceComparisonService = Depends(get_comparisons),
+    catalog: ItemCatalog = Depends(get_catalog),
 ) -> SearchResponse:
     try:
         items = await comparisons.search(q, limit=limit)
@@ -117,6 +133,46 @@ async def compare_prices(
 @router.get("/marketplaces", response_model=MarketplaceResponse)
 async def list_marketplaces(engine: MarketEngine = Depends(get_engine)) -> MarketplaceResponse:
     return MarketplaceResponse(marketplaces=list(engine.registry.names))
+
+
+@router.get(
+    "/items/{market_hash_name}/comparison",
+    response_model=StoredComparisonResponse,
+)
+async def compare_stored_prices(
+    market_hash_name: str,
+    currency: str = Query(default="GBP", pattern=r"^[A-Z]{3}$"),
+    quote_type: QuoteType = QuoteType.LOWEST_ASK,
+    engine: MarketEngine = Depends(get_engine),
+) -> StoredComparisonResponse:
+    item = _item_or_422(market_hash_name)
+    quotes = await engine.storage.get_latest_quotes(
+        item, currency=currency, quote_type=quote_type
+    )
+    comparison = engine.pricing.compare(
+        item,
+        quotes,
+        currency=currency,
+        quote_type=quote_type,
+        as_of=datetime.now(UTC),
+    )
+    return StoredComparisonResponse(
+        market_hash_name=market_hash_name,
+        currency=currency,
+        quote_type=quote_type,
+        simulated=(
+            bool(comparison.quotes)
+            and all(
+                quote.marketplace in engine.simulated_marketplaces
+                for quote in comparison.quotes
+            )
+        ),
+        quotes=[_quote_response(quote) for quote in comparison.quotes],
+        lowest_price=comparison.lowest_price,
+        highest_price=comparison.highest_price,
+        spread=comparison.spread,
+        excluded_count=len(comparison.excluded_quotes),
+    )
 
 
 @router.get("/items/{market_hash_name}/quotes", response_model=QuoteCollectionResponse)
@@ -271,6 +327,27 @@ async def list_alert_rules(
 ) -> AlertRuleCollectionResponse:
     return AlertRuleCollectionResponse(
         rules=[_alert_rule_response(rule) for rule in await engine.alerts.list_rules()]
+    )
+
+
+@router.get("/alerts/events", response_model=AlertEventCollectionResponse)
+async def list_alert_events(
+    rule_id: UUID | None = None,
+    engine: MarketEngine = Depends(get_engine),
+) -> AlertEventCollectionResponse:
+    events = await engine.storage.list_alert_events(rule_id=rule_id)
+    return AlertEventCollectionResponse(
+        events=[
+            AlertEventResponse(
+                id=event.id,
+                rule_id=event.rule_id,
+                quote=_quote_response(event.quote),
+                condition=event.condition.value,
+                threshold=event.threshold,
+                triggered_at=event.triggered_at,
+            )
+            for event in events
+        ]
     )
 
 
