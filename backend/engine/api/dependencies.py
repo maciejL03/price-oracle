@@ -2,6 +2,7 @@
 
 from fastapi import Request
 
+from engine.catalog import ItemCatalog
 from engine.market_engine import MarketEngine
 from engine.services import MarketplaceComparisonService
 
@@ -15,3 +16,14 @@ def get_comparisons(request: Request) -> MarketplaceComparisonService:
     if comparisons is None:
         raise RuntimeError("market comparison services are not configured")
     return comparisons
+
+
+def get_catalog(request: Request) -> ItemCatalog:
+    engine = get_engine(request)
+    catalog = getattr(engine, "catalog", None)
+    if catalog is not None:
+        return catalog
+    comparisons = getattr(engine, "comparisons", None)
+    if comparisons is not None:
+        return comparisons
+    raise RuntimeError("item catalog is not configured")

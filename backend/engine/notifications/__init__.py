@@ -1,7 +1,13 @@
 """Durable delivery of engine alert events."""
 
 from .models import DeliveryFailureCode, DeliveryStatus, NotificationDelivery
-from .service import NotificationPolicy, NotificationService, NotificationStorage
+from .service import (
+    NotificationPolicy,
+    NotificationService,
+    NotificationStorage,
+    SimulatedNotificationService,
+    validate_discord_webhook_url,
+)
 
 __all__ = [
     "DeliveryFailureCode",
@@ -10,4 +16,6 @@ __all__ = [
     "NotificationPolicy",
     "NotificationService",
     "NotificationStorage",
+    "SimulatedNotificationService",
+    "validate_discord_webhook_url",
 ]

@@ -82,14 +82,15 @@ async with engine:
     ...
 ```
 
-`create_market_engine()` performs no database I/O and starts no tasks. By default it constructs
-the catalog plus Steam, Skinport, and optionally CSFloat (`CS2_CSFLOAT_ENABLED`). Tests and
+`create_market_engine()` performs no database I/O and starts no tasks. In the default `demo` mode
+it constructs the bundled catalog and two deterministic demo providers. In explicit `public` mode
+it constructs the remote catalog plus enabled Steam, Skinport, and CSFloat providers. Tests and
 self-hosted extensions can inject an iterable of marketplace implementations; injected marketplace
 resources are transferred to the engine and closed at shutdown.
 
-`NotificationService` is constructed only when `CS2_DISCORD_WEBHOOK_URL` is configured. Without a
-webhook, alert events remain durable but no external delivery is attempted. A supplied notification
-HTTP client is also transferred to the engine and closed during shutdown.
+Demo mode uses `SimulatedNotificationService`, which records a durable success without network I/O.
+Public mode constructs `NotificationService` only for a valid `CS2_DISCORD_WEBHOOK_URL`; otherwise
+alert events remain durable and no external delivery is attempted.
 
 For a standalone process, run from `backend/`:
 
@@ -245,25 +246,22 @@ It covers dependency order, registry composition, handler and scheduler activati
 watchlist restoration, fetch-and-persist, alert/event/delivery integration, recurring job failure
 isolation, partial-start cleanup, graceful active-work shutdown, cancellation, terminal/repeated
 lifecycle calls, owned-resource closure, and orphan-task checks. It performs no live API calls.
-The complete backend suite passes **374 tests** after process and final integration validation.
+The complete backend suite passes **411 tests** after keyless Docker integration validation.
 
-Container deployment is defined by [`../Dockerfile`](../Dockerfile) and
-[`../../compose.yaml`](../../compose.yaml). The image runs `python -m engine` as an unprivileged
-user, while Compose mounts SQLite at `/data/engine.sqlite3` and allows signal-driven cleanup before
-container termination.
-The complete backend suite passes **378 tests** after API integration.
+Container deployment is defined by [`../../Dockerfile`](../../Dockerfile) and
+[`../../compose.yaml`](../../compose.yaml). FastAPI owns one engine in a one-worker Uvicorn process,
+while Compose persists SQLite under `/var/lib/price-oracle` and allows lifespan-driven cleanup.
 
 ## Known limitations
 
 - CSFloat data is currently individual-listing data and therefore does not drive lowest-ask alerts.
-- Discord is the only notification channel, and absent credentials intentionally disable delivery.
+- Public-mode external delivery supports Discord; demo mode records simulated delivery.
 - Notification retries are bounded and inline. There is no recovery lease for a delivery left
   `pending` by process termination.
 - There is no durable event-dispatch worker. An alert event committed immediately before a process
   or notification-integration failure remains queryable but is not automatically redelivered.
-- The standalone process is implemented, but the separate FastAPI application does not expose
-  engine state or management endpoints.
-- [`api/`](api/README.md) owns the FastAPI lifespan and starts/stops one engine per ASGI process.
+- [`api/`](api/README.md) exposes engine state and management routes and owns one engine per ASGI
+  process.
 - SQLite tables are created with SQLAlchemy `create_all`; schema migration tooling is not yet part
   of this repository.
 - Steam and Skinport are aggregate lowest-ask providers for the compatibility comparison API;

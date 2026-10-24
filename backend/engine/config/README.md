@@ -71,6 +71,8 @@ settings = EngineSettings()
 
 | Field | Type | Default | Responsibility |
 |---|---|---:|---|
+| `operating_mode` | `demo \| public` | `demo` | Offline fixtures or best-effort public providers |
+| `demo_seed_enabled` | `bool` | `true` | Idempotent sample watchlist and alert |
 | `worker_count` | `int` | `5` | Maximum number of jobs the handler can execute concurrently |
 | `job_queue_capacity` | `int` | `100` | Maximum number of jobs waiting for a worker |
 | `job_shutdown_timeout_seconds` | `float` | `10.0` | Maximum graceful-drain time before handler cancellation |
@@ -85,6 +87,7 @@ settings = EngineSettings()
 | `csfloat_timeout_seconds` | `float` | `10.0` | Per-request CSFloat timeout |
 | `discord_webhook_url` | `SecretStr \| None` | `None` | Optional Discord notification destination |
 | `catalog_*` | URL / `float` | public ByMykel URL / `86400` | Catalog source and cache TTL |
+| `steam_enabled` | `bool` | `true` | Register Steam in public mode |
 | `steam_*` | country/currency/app fields | GB / GBP / 730 | Steam compatibility provider configuration |
 | `skinport_*` | currency/URL/TTL | GBP / API URL / `300` | Skinport compatibility provider configuration |
 | `http_timeout_seconds` | `float` | `30` | Shared catalog, Steam, and Skinport request timeout |
@@ -270,7 +273,7 @@ Run the full backend suite from `backend/`:
 .venv/bin/python -m pytest -q
 ```
 
-After final integration, the full suite completed with **374 passing tests**. The tests
+After final integration, the full suite completed with **411 passing tests**. The tests
 require no Docker daemon, network calls, external database server, or real credentials.
 
 ## Extending the module

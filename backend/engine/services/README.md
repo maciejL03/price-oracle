@@ -240,7 +240,7 @@ python -m pytest -q
 ```
 
 The implementation was verified with Python 3.12: **29 pricing tests passed** and the integrated
-backend suite completed with **374 tests passed**. Tests use synthetic data and require no network,
+backend suite completed with **411 tests passed**. Tests use synthetic data and require no network,
 database, credentials, or running marketplace.
 
 ### Known limitations and extension points

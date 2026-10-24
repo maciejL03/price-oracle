@@ -107,6 +107,30 @@ async def run(
     return EXIT_FAILURE if shutdown_failed else EXIT_SUCCESS
 
 
+async def run_market_engine(
+    engine: MarketEngine,
+    *,
+    shutdown_event: asyncio.Event | None = None,
+    handle_signals: bool = True,
+) -> None:
+    """Run an already-composed engine until an explicit shutdown request."""
+    if not isinstance(engine, MarketEngine):
+        raise TypeError("engine must be a MarketEngine")
+    if shutdown_event is not None and not isinstance(shutdown_event, asyncio.Event):
+        raise TypeError("shutdown_event must be an asyncio.Event")
+
+    event = shutdown_event or asyncio.Event()
+    loop = asyncio.get_running_loop()
+    installed = _install_signal_handlers(loop, event) if handle_signals else ()
+    try:
+        await engine.start()
+        logger.info("Market engine is running")
+        await event.wait()
+    finally:
+        _remove_signal_handlers(loop, installed)
+        await engine.stop()
+
+
 def main() -> int:
     """Run the engine process and translate an interrupted task into an exit code."""
     configure_logging()

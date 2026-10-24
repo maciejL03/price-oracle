@@ -54,6 +54,14 @@ class MarketplaceResponse(BaseModel):
     marketplaces: list[str]
 
 
+class SystemStatusResponse(BaseModel):
+    status: str
+    operating_mode: str
+    data_kind: str
+    marketplaces: list[str]
+    notifications: str
+
+
 class QuoteResponse(BaseModel):
     marketplace: str
     market_hash_name: str
@@ -66,6 +74,18 @@ class QuoteResponse(BaseModel):
 
 class QuoteCollectionResponse(BaseModel):
     quotes: list[QuoteResponse]
+
+
+class StoredComparisonResponse(BaseModel):
+    market_hash_name: str
+    currency: str
+    quote_type: QuoteType
+    simulated: bool
+    quotes: list[QuoteResponse]
+    lowest_price: Decimal | None
+    highest_price: Decimal | None
+    spread: Decimal | None
+    excluded_count: int
 
 
 class WatchlistItemRequest(BaseModel):
@@ -125,6 +145,19 @@ class AlertRuleResponse(BaseModel):
 
 class AlertRuleCollectionResponse(BaseModel):
     rules: list[AlertRuleResponse]
+
+
+class AlertEventResponse(BaseModel):
+    id: UUID
+    rule_id: UUID
+    quote: QuoteResponse
+    condition: str
+    threshold: Decimal
+    triggered_at: datetime
+
+
+class AlertEventCollectionResponse(BaseModel):
+    events: list[AlertEventResponse]
 
 
 class NotificationDeliveryResponse(BaseModel):

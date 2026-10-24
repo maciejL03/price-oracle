@@ -12,7 +12,7 @@ from engine.catalog import ItemCatalog
 from engine.errors import EngineError
 from engine.jobs import JobHandler, JobScheduler
 from engine.marketplaces import MarketplaceRegistry
-from engine.notifications import NotificationService
+from engine.notifications import NotificationService, SimulatedNotificationService
 from engine.services import CollectionService, MarketplaceComparisonService, PricingService
 from engine.storage import StorageService
 from engine.watchlists import WatchlistService
@@ -20,6 +20,7 @@ from engine.watchlists import WatchlistService
 logger = logging.getLogger(__name__)
 
 AsyncCloser = Callable[[], Awaitable[None]]
+AsyncInitializer = Callable[[], Awaitable[None]]
 
 
 class EngineState(str, Enum):
@@ -72,10 +73,13 @@ class MarketEngine:
         watchlists: WatchlistService,
         pricing: PricingService,
         alerts: AlertService,
-        notifications: NotificationService | None,
+        notifications: NotificationService | SimulatedNotificationService | None,
         owned_resource_closers: Iterable[AsyncCloser] = (),
         catalog: ItemCatalog | None = None,
         comparisons: MarketplaceComparisonService | None = None,
+        operating_mode: str = "public",
+        simulated_marketplaces: Iterable[str] = (),
+        initialize_data: AsyncInitializer | None = None,
     ) -> None:
         self.storage = storage
         self.registry = registry
@@ -88,8 +92,11 @@ class MarketEngine:
         self.notifications = notifications
         self.catalog = catalog
         self.comparisons = comparisons
+        self.operating_mode = operating_mode
+        self.simulated_marketplaces = frozenset(simulated_marketplaces)
 
         self._owned_resource_closers = tuple(owned_resource_closers)
+        self._initialize_data = initialize_data
         self._lifecycle_lock = asyncio.Lock()
         self._state = EngineState.NEW
         self._handler_started = False
@@ -124,6 +131,10 @@ class MarketEngine:
             stage = "storage initialization"
             try:
                 await self.storage.initialize()
+
+                if self._initialize_data is not None:
+                    stage = "initial data setup"
+                    await self._initialize_data()
 
                 stage = "job handler startup"
                 await self.job_handler.start()
@@ -243,6 +254,7 @@ class MarketEngine:
 
 __all__ = [
     "AsyncCloser",
+    "AsyncInitializer",
     "EngineLifecycleError",
     "EngineShutdownError",
     "EngineStartupError",

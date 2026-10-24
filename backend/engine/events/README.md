@@ -116,7 +116,7 @@ ordering, concurrent and nested publishing, handler snapshots, exceptions, cance
 instances, and the absence of EventBus background tasks.
 
 Results for this change: `tests/test_event_bus.py` passed **14 tests**. The complete backend suite
-passed **383 tests**. Both commands completed on 2026-10-21 using Python 3.12 and the dependencies
+passed **411 tests**. The latest complete run used Python 3.12 and the dependencies
 declared in `requirements.txt`.
 
 ## Safe future integration points

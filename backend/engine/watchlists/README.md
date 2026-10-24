@@ -206,7 +206,7 @@ python -m pytest -q
 Latest implementation run:
 
 - Watchlist module: **24 passed**
-- Complete backend suite: **374 passed**
+- Complete backend suite: **411 passed**
 
 The suite uses fake storage, scheduler, jobs, and marketplaces. It also uses the real scheduler and
 handler for the active-fetch removal case. No live marketplace API is called.
