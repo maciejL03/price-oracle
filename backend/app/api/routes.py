@@ -40,7 +40,13 @@ async def search_items(
     limit: int = Query(default=20, ge=1, le=50),
     search_service: ItemSearchService = Depends(get_search_service),
 ) -> SearchResponse:
-    items = await search_service.search(q, limit=limit)
+    try:
+        items = await search_service.search(q, limit=limit)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Item catalog error: {exc}",
+        ) from exc
     return SearchResponse(
         items=[
             CatalogItemSchema(

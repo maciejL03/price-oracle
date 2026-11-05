@@ -1,9 +1,9 @@
-import json
 import time
 from pathlib import Path
 
 import httpx
 
+from app.adapters.cache_io import read_json_cache, write_json_cache
 from app.config import settings
 from app.domain.models import CatalogItem
 from app.ports.marketplaces import ItemCatalog
@@ -25,17 +25,18 @@ class ByMykelCatalog(ItemCatalog):
         if cache_path.exists():
             age = time.time() - cache_path.stat().st_mtime
             if age < settings.items_cache_ttl_seconds:
-                raw = json.loads(cache_path.read_text(encoding="utf-8"))
-                self._populate(raw)
-                self._loaded_at = time.time()
-                return
+                cached = read_json_cache(cache_path)
+                if isinstance(cached, dict):
+                    self._populate(cached)
+                    self._loaded_at = time.time()
+                    return
 
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as client:
             response = await client.get(settings.bymykel_items_url)
             response.raise_for_status()
             raw = response.json()
 
-        cache_path.write_text(json.dumps(raw), encoding="utf-8")
+        write_json_cache(cache_path, raw)
         self._populate(raw)
         self._loaded_at = time.time()
 

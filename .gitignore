@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 .env
+!.env.example
+secrets/
 *.egg-info/
 dist/
 build/
@@ -15,6 +17,9 @@ frontend/.vite/
 
 # Cache
 backend/.cache/
+backend/data/
+*.sqlite3
+*.sqlite3-*
 *.log
 
 # IDE
