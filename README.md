@@ -23,9 +23,7 @@ docker compose up --build -d
 ```
 
 No API keys are required for the offline demo, and no `.env` file should be needed for its defaults.
-At present, the image builds but the only Compose service enters a restart loop because
-[`create_market_engine()`](backend/engine/bootstrap.py) references an unimported
-`CollectionPolicy`. In addition, [`compose.yaml`](compose.yaml) defines only the headless engine;
+At present, [`compose.yaml`](compose.yaml) defines only the headless engine;
 it does not define or publish the API and frontend services expected by the demo and smoke test.
 
 Do not treat a successful `docker compose up` exit code as a successful installation. Check the
@@ -304,8 +302,15 @@ cd backend
 python -m pytest
 ```
 
-The suite currently stops during collection because `engine.api.routes` references
-`SystemStatusResponse` without importing it. No current passing-test count is claimed.
+From `backend/` with `PYTHONPATH=.`, the suite currently reports **410 passed** and **6 failed** on
+Python 3.11 (integration branch). Failures are concentrated in demo/bootstrap notification paths; see
+[Current Limitations](#current-limitations).
+
+If Skinport price fetch fails with `'utf-8' codec can't decode byte 0x8b`, reinstall Brotli:
+
+```bash
+pip install --force-reinstall brotli
+```
 
 Useful narrower commands are:
 
@@ -406,10 +411,10 @@ and extension rules in more detail.
 
 ## Current Limitations
 
-- **Quick Start is broken:** `price-oracle-engine` restarts with an unimported `CollectionPolicy` in
-  `bootstrap.py`. Importing FastAPI separately fails first on an unimported
-  `SystemStatusResponse`; the route module has additional missing schema/catalog names and an
-  incorrect search variable.
+- **Integration branch repairs (local):** `CollectionPolicy` import, API schema imports, catalog
+  search wiring, Skinport Brotli fallback, and Python 3.11 `TypeAlias` compatibility were fixed on
+  `integration/branch-consolidation`. Six backend tests still fail (demo mode and notification
+  bootstrap paths).
 - **Bootstrap has further merge damage:** it references `csfloat`, `SimulatedNotificationService`,
   and `validate_discord_webhook_url` without valid definitions/imports in that module, overwrites the
   demo catalog with the network catalog, and does not honor the Steam/Skinport enable settings.
