@@ -29,6 +29,7 @@ from engine.marketplaces import (
 from engine.models import Item, MarketQuote, QuoteType
 from engine.notifications import NotificationService
 from engine.services import (
+    CollectionPolicy,
     CollectionService,
     MarketplaceComparisonService,
     PricingService,
