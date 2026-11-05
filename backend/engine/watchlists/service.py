@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeAlias
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
@@ -44,7 +44,7 @@ class RecurringScheduler(Protocol):
     def unregister(self, key: str) -> bool: ...
 
 
-type FetchJobFactory = Callable[[str, Item], EngineJob]
+FetchJobFactory: TypeAlias = Callable[[str, Item], EngineJob]
 
 
 class WatchlistError(EngineError):

@@ -16,6 +16,7 @@ from engine.watchlists import Watchlist, WatchlistNotFoundError
 
 from .dependencies import get_catalog, get_comparisons, get_engine
 from .schemas import (
+    AlertEventCollectionResponse,
     AlertRuleCollectionResponse,
     AlertRuleCreateRequest,
     AlertRuleResponse,
@@ -28,6 +29,7 @@ from .schemas import (
     SearchResponse,
     SkinportPriceSchema,
     SteamPriceSchema,
+    StoredComparisonResponse,
     SystemStatusResponse,
     WatchlistCollectionResponse,
     WatchlistCreateRequest,
