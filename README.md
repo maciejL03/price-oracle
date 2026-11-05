@@ -37,7 +37,7 @@ API, documentation, or health-check URL reachable through `docker compose up`.
 | Component | Configured listener | Host address in active Compose | Purpose |
 | --- | ---: | --- | --- |
 | Engine daemon | None | Not exposed | Scheduling, collection, persistence, alerts, notifications |
-| FastAPI image | Container `8000` | Not included in Compose | API; its current import also fails |
+| FastAPI image | Container `8000` | Not included in Compose | API owned by one `MarketEngine` |
 | Frontend image | Container `8080` | Not included in Compose | Nginx-served React application |
 | Vite development server | `127.0.0.1:5173` | `http://localhost:5173` when run separately | Frontend development; proxies `/api` to port `8000` |
 
@@ -60,14 +60,8 @@ docker compose ps -a
 docker compose logs --tail=200 price-oracle-engine
 ```
 
-On the current revision, the relevant log output is expected to resemble this illustrative excerpt:
-
-```text
-NameError: name 'CollectionPolicy' is not defined
-```
-
-That is a known repository defect, not a missing credential. A healthy future demo should also make
-the following checks pass:
+`create_market_engine()` now imports its dependencies and starts in demo mode without credentials.
+Compose still publishes no host ports, so these checks need a separately running API:
 
 ```bash
 curl --fail http://127.0.0.1:8000/api/health
@@ -301,9 +295,8 @@ cd backend
 python -m pytest
 ```
 
-From `backend/` with `PYTHONPATH=.`, the suite currently reports **410 passed** and **6 failed** on
-Python 3.11 (integration branch). Failures are concentrated in demo/bootstrap notification paths; see
-[Current Limitations](#current-limitations).
+From `backend/`, `python -m pytest` currently reports **416 passed** on Python 3.11. Pytest adds
+that directory to `sys.path`, so a separate `PYTHONPATH` is not required for the suite.
 
 If Skinport price fetch fails with `'utf-8' codec can't decode byte 0x8b`, reinstall Brotli:
 
@@ -410,19 +403,11 @@ and extension rules in more detail.
 
 ## Current Limitations
 
-- **Integration branch repairs (local):** `CollectionPolicy` import, API schema imports, catalog
-  search wiring, Skinport Brotli fallback, and Python 3.11 `TypeAlias` compatibility were fixed on
-  `integration/branch-consolidation`. Six backend tests still fail (demo mode and notification
-  bootstrap paths).
-- **Bootstrap has further merge damage:** it references `csfloat`, `SimulatedNotificationService`,
-  and `validate_discord_webhook_url` without valid definitions/imports in that module, overwrites the
-  demo catalog with the network catalog, and does not honor the Steam/Skinport enable settings.
+- **Bootstrap demo and public modes are wired:** demo uses the offline catalog and simulated
+  notifications; public mode registers CSFloat only when its configuration is valid, and honors the
+  Steam and Skinport enable flags.
 - **Compose is not full-stack:** only the headless daemon exists, with no published ports or health
   check. The frontend proxy and smoke test expect services named `api` and `frontend`.
-- **Proposed repair:** restore a coherent demo/public branch in `create_market_engine()`, import all
-  API schemas and `ItemCatalog`, fix `search_items()` to use its injected catalog, and restore the
-  `api`/`frontend` Compose services with loopback host mappings and health checks. Then rerun the
-  backend suite and isolated smoke test before advertising the localhost URLs as working.
 - Live provider behavior depends on third-party availability, rate limits, and access policy; only
   mocked compatibility is covered in the repository.
 - There is no authentication or authorization. If the management API is restored, it must be

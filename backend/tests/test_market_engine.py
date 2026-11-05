@@ -194,7 +194,9 @@ async def test_default_bootstrap_closes_each_owned_http_resource_once(
         bootstrap_module, "SkinportMarketplace", lambda **_: Provider("skinport")
     )
 
-    engine = create_market_engine(_settings(tmp_path / "engine.sqlite3"))
+    engine = create_market_engine(
+        _settings(tmp_path / "engine.sqlite3", operating_mode="public")
+    )
     await engine.start()
     await engine.stop()
 
