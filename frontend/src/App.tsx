@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  comparePrices,
   getAlertEvents,
   getStoredComparison,
   getSystemStatus,
   getWatchlists,
 } from "./api/client";
+import { ComparisonView } from "./components/ComparisonView";
 import { Layout } from "./components/Layout";
 import { SearchBox } from "./components/SearchBox";
 import { useItemSearch } from "./hooks/useItemSearch";
@@ -12,6 +14,7 @@ import type {
   AlertEventSummary,
   CatalogItem,
   StoredComparison,
+  ComparisonResult,
   SystemStatus,
   WatchlistSummary,
 } from "./types";
@@ -34,6 +37,10 @@ export default function App() {
   const [watchlists, setWatchlists] = useState<WatchlistSummary[]>([]);
   const [events, setEvents] = useState<AlertEventSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [liveComparison, setLiveComparison] = useState<ComparisonResult | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const isPublic = status?.operating_mode === "public";
 
   const refresh = useCallback(async () => {
     try {
@@ -59,6 +66,36 @@ export default function App() {
     const timer = window.setInterval(() => void refresh(), 2_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (!isPublic) {
+      setLiveComparison(null);
+      setLiveError(null);
+      setLiveLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLiveLoading(true);
+    setLiveError(null);
+    comparePrices(selectedItem)
+      .then((result) => {
+        if (!cancelled) setLiveComparison(result);
+      })
+      .catch((reason) => {
+        if (!cancelled) {
+          setLiveComparison(null);
+          setLiveError(reason instanceof Error ? reason.message : "Live price lookup failed");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLiveLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPublic, selectedItem]);
 
   function select(item: CatalogItem) {
     setSelectedItem(item.market_hash_name);
@@ -106,6 +143,23 @@ export default function App() {
         </div>
       )}
 
+      {isPublic && (
+        <section className="mb-8">
+          {liveLoading && (
+            <div className="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-10 text-center text-[var(--text-secondary)]">
+              Fetching live Steam and Skinport prices for {selectedItem}…
+            </div>
+          )}
+          {liveError && (
+            <div role="alert" className="rounded-xl border border-[var(--accent-red)]/30 bg-[var(--accent-red)]/10 p-4 text-sm text-[var(--accent-red)]">
+              {liveError}
+            </div>
+          )}
+          {liveComparison && !liveLoading && <ComparisonView comparison={liveComparison} />}
+        </section>
+      )}
+
+      {!isPublic && (
       <section className="mb-8">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
           <div>
@@ -144,6 +198,7 @@ export default function App() {
           </p>
         )}
       </section>
+      )}
 
       <section className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-4">

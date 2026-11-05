@@ -17,6 +17,7 @@ from engine.watchlists import Watchlist, WatchlistNotFoundError
 from .dependencies import get_catalog, get_comparisons, get_engine
 from .schemas import (
     AlertEventCollectionResponse,
+    AlertEventResponse,
     AlertRuleCollectionResponse,
     AlertRuleCreateRequest,
     AlertRuleResponse,
