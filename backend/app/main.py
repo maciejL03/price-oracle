@@ -1,21 +1,16 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""Compatibility ASGI entry point for the engine-backed HTTP API."""
 
-from app.api.routes import router
-from app.config import settings
+import logging
 
-app = FastAPI(
-    title="CS2 Price Oracle",
-    description="Compare CS2 item prices between Steam Market and Skinport.",
-    version="1.0.0",
+from engine.api import create_app
+
+engine_logger = logging.getLogger("engine")
+engine_logger.setLevel(logging.INFO)
+engine_handler = logging.StreamHandler()
+engine_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 )
+engine_logger.handlers = [engine_handler]
+engine_logger.propagate = False
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(router)
+app = create_app()

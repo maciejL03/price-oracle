@@ -16,14 +16,13 @@ export function Layout({ children }: LayoutProps) {
             Price Oracle
           </h1>
           <p className="mx-auto mt-3 max-w-xl text-[var(--text-secondary)]">
-            Compare Steam Market and Skinport prices in GBP. Search any CS2 item
-            and see which marketplace is cheaper.
+            Monitor exact CS2 item variants through the Price Oracle engine.
+            Demo mode uses clearly labelled simulated data and no credentials.
           </p>
         </header>
         {children}
         <footer className="mt-16 border-t border-[var(--border-subtle)] pt-6 text-center text-sm text-[var(--text-muted)]">
-          Prices from Steam Community Market (GB) and Skinport API. For
-          informational use only.
+          Prices are informational observations, not trading recommendations.
         </footer>
       </div>
     </div>
