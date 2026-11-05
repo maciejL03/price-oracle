@@ -5,6 +5,12 @@ engine collects normalized marketplace observations, stores exact prices and his
 schedules watchlists, evaluates threshold alerts, and can deliver Discord notifications. A React
 frontend and FastAPI transport are also present.
 
+## GitHub Pages
+
+The static site is published by GitHub Actions to [https://maciejl03.github.io/price-oracle/](https://maciejl03.github.io/price-oracle/).
+
+That build is the offline demo. GitHub Pages only serves the website, so it cannot run the Python API. Live Steam and Skinport prices still require the backend, either locally or on a host added later.
+
 The repository includes a deterministic offline demo that is designed to work without marketplace
 credentials or network calls. However, the current `engine` branch has integration regressions that
 prevent both the demo and public mode from starting. The affected commands and proposed repairs are

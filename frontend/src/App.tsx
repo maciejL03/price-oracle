@@ -6,6 +6,7 @@ import {
   getSystemStatus,
   getWatchlists,
 } from "./api/client";
+import { STATIC_DEMO } from "./demo/staticDemo";
 import { ComparisonView } from "./components/ComparisonView";
 import { Layout } from "./components/Layout";
 import { SearchBox } from "./components/SearchBox";
@@ -115,9 +116,11 @@ export default function App() {
               {status?.operating_mode === "demo" ? "Offline demo" : "Public marketplace mode"}
             </p>
             <p className="mt-1 text-sm text-[var(--text-secondary)]">
-              {status?.data_kind === "simulated"
-                ? "All displayed prices are deterministic simulations. No marketplace network calls are made."
-                : "Live providers are best-effort and may be unavailable or rate limited."}
+              {STATIC_DEMO
+                ? "GitHub Pages is serving the offline demo. Live Steam and Skinport prices need the API, which will be hosted separately."
+                : status?.data_kind === "simulated"
+                  ? "All displayed prices are deterministic simulations. No marketplace network calls are made."
+                  : "Live providers are best-effort and may be unavailable or rate limited."}
             </p>
           </div>
           <span className="rounded-full bg-[var(--bg-base)] px-3 py-1 text-xs font-medium">
