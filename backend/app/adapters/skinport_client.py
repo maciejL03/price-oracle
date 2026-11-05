@@ -4,9 +4,15 @@ from pathlib import Path
 
 import httpx
 
+from app.adapters.cache_io import read_json_cache, write_json_cache
 from app.config import settings
 from app.domain.models import SkinportPrice
 from app.ports.marketplaces import SkinportMarket
+
+_BROTLI_HELP = (
+    "Skinport requires Brotli decompression. "
+    "From the backend folder run: pip install --force-reinstall brotli"
+)
 
 
 class SkinportApiClient(SkinportMarket):
@@ -19,16 +25,17 @@ class SkinportApiClient(SkinportMarket):
             return
 
         cache_path = Path(settings.cache_dir) / f"skinport_{settings.skinport_currency.lower()}.json"
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-        raw: list[dict]
+        raw: list[dict] | None = None
         if cache_path.exists():
             age = time.time() - cache_path.stat().st_mtime
             if age < settings.skinport_cache_ttl_seconds:
-                raw = json.loads(cache_path.read_text(encoding="utf-8"))
-                self._build_index(raw)
-                self._loaded_at = time.time()
-                return
+                cached = read_json_cache(cache_path)
+                if isinstance(cached, list):
+                    raw = cached
+                    self._build_index(raw)
+                    self._loaded_at = time.time()
+                    return
 
         params = {
             "app_id": settings.steam_app_id,
@@ -43,9 +50,9 @@ class SkinportApiClient(SkinportMarket):
                 headers={"Accept-Encoding": "br"},
             )
             response.raise_for_status()
-            raw = response.json()
+            raw = _parse_items_response(response)
 
-        cache_path.write_text(json.dumps(raw), encoding="utf-8")
+        write_json_cache(cache_path, raw)
         self._build_index(raw)
         self._loaded_at = time.time()
 
@@ -74,6 +81,41 @@ class SkinportApiClient(SkinportMarket):
     async def get_price(self, market_hash_name: str) -> SkinportPrice | None:
         await self._ensure_index()
         return self._index.get(market_hash_name)
+
+
+def _parse_items_response(response: httpx.Response) -> list[dict]:
+    payload = _response_json(response)
+
+    if isinstance(payload, dict):
+        errors = payload.get("errors")
+        if errors:
+            message = errors[0].get("message", "Skinport API error")
+            raise ValueError(message)
+        raise ValueError("Unexpected Skinport response format.")
+
+    if not isinstance(payload, list):
+        raise ValueError("Unexpected Skinport response format.")
+
+    return payload
+
+
+def _response_json(response: httpx.Response) -> object:
+    try:
+        return response.json()
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return json.loads(_decompress_brotli(response.content).decode("utf-8"))
+
+
+def _decompress_brotli(data: bytes) -> bytes:
+    try:
+        import brotli
+    except ImportError as exc:
+        raise RuntimeError(_BROTLI_HELP) from exc
+
+    try:
+        return brotli.decompress(data)
+    except Exception as exc:
+        raise RuntimeError(_BROTLI_HELP) from exc
 
 
 def _optional_float(value: object) -> float | None:

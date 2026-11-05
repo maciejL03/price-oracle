@@ -52,6 +52,12 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
+If price lookup fails with a UTF-8 / `0x8b` error, Skinport’s Brotli response did not decode — reinstall Brotli in the venv:
+
+```bash
+pip install --force-reinstall brotli
+```
+
 ### 2. Frontend
 
 ```bash

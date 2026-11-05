@@ -1,4 +1,8 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -15,7 +19,7 @@ class Settings(BaseSettings):
         "https://raw.githubusercontent.com/ByMykel/CSGO-API/main/public/api/en/all.json"
     )
 
-    cache_dir: str = ".cache"
+    cache_dir: str = str(_BACKEND_ROOT / ".cache")
     items_cache_ttl_seconds: int = 86_400  # 24 hours
     skinport_cache_ttl_seconds: int = 300  # 5 minutes
 
