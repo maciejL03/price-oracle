@@ -278,9 +278,8 @@ cd backend
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
-That backend command is the configured development entry point, but it currently stops during route
-import; see [Current Limitations](#current-limitations). When repaired, it owns one `MarketEngine`
-through the FastAPI lifespan and exposes the API on `http://127.0.0.1:8000`.
+That backend command starts one `MarketEngine` through the FastAPI lifespan and exposes the API on
+`http://127.0.0.1:8000`. Set `PYTHONPATH=.` (or run from `backend/`) so the `engine` package resolves.
 
 In a second terminal, install and start the frontend:
 
